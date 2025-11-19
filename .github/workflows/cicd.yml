@@ -12,10 +12,10 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository with submodules
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive  # подтягиваем Ouroboros-front и Ouroboros-back
+          fetch-depth: 0  # полное клонирование, без submodules
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -70,4 +70,9 @@ jobs:
             docker stop ouroboros-back-container || true
             docker rm ouroboros-back-container || true
 
-            docker stop ouroboros-fron
+            docker stop ouroboros-front-container || true
+            docker rm ouroboros-front-container || true
+
+            # Run new containers
+            docker run -d --name ouroboros-back-container -p 8000:8000 --restart unless-stopped ${{ secrets.DOCKER_IMAGE_BACK }}:latest
+            docker run -d --name ouroboros-front-container -p 80:80 --restart unless-stopped ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
