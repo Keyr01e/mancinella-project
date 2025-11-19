@@ -2,7 +2,7 @@ name: CI/CD - Build & Deploy (Front + Back)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 env:
@@ -19,20 +19,12 @@ jobs:
           fetch-depth: 0
 
       # 2. Клонируем фронт в подпапку front
-      - name: Checkout Ouroboros-front
-        uses: actions/checkout@v4
-        with:
-          repository: Keyr01e/Ouroboros-front
-          path: front
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Clone Ouroboros-front
+        run: git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/Keyr01e/Ouroboros-front.git front
 
       # 3. Клонируем бэк в подпапку back
-      - name: Checkout Ouroboros-back
-        uses: actions/checkout@v4
-        with:
-          repository: Keyr01e/Ouroboros-back
-          path: back
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Clone Ouroboros-back
+        run: git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/Keyr01e/Ouroboros-back.git back
 
       # 4. Настраиваем Docker Buildx
       - name: Setup Docker Buildx
