@@ -87,10 +87,112 @@ jobs:
             docker rm ouroboros-front-container || true
 
             echo "Starting BACK container..."
-            docker run -d --name ouroboros-back-container -p 8000:8000 --restart unless-stopped ${{ secrets.DOCKER_IMAGE_BACK }}:latest
+            docker run -d -
+name: CI/CD - Build & Deploy (Front + Back)
 
-            echo "Starting FRONT container..."
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 🔥 ЛОГИРОВАНИЕ СЕКРЕТОВ (без показa паролей)
+      - name: Check required secrets
+        run: |
+          echo "=== Checking secrets availability ==="
+
+          if [ -z "${{ secrets.DOCKER_USER }}" ]; then
+            echo "::error::❌ DOCKER_USER is EMPTY. Add it in Settings → Secrets → Actions"
+            exit 1
+          else
+            echo "✔ DOCKER_USER is set: ${{ secrets.DOCKER_USER }}"
+          fi
+
+          if [ -z "${{ secrets.DOCKER_PASSWORD }}" ]; then
+            echo "::error::❌ DOCKER_PASSWORD is EMPTY."
+            exit 1
+          else
+            echo "✔ DOCKER_PASSWORD is set."
+          fi
+
+          if [ -z "${{ secrets.DOCKER_IMAGE_FRONT }}" ]; then
+            echo "::error::❌ DOCKER_IMAGE_FRONT is EMPTY."
+            exit 1
+          else
+            echo "✔ DOCKER_IMAGE_FRONT = ${{ secrets.DOCKER_IMAGE_FRONT }}"
+          fi
+
+          if [ -z "${{ secrets.DOCKER_IMAGE_BACK }}" ]; then
+            echo "::error::❌ DOCKER_IMAGE_BACK is EMPTY."
+            exit 1
+          else
+            echo "✔ DOCKER_IMAGE_BACK = ${{ secrets.DOCKER_IMAGE_BACK }}"
+          fi
+
+          echo "=== Secrets check passed ==="
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 🔥 ЛОГИН В DOCKER HUB
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # 🔥 БИЛД И ПУШ ФРОНТА
+      - name: Build & Push FRONT Image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./front
+          file: ./front/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
+
+      # 🔥 БИЛД И ПУШ БЭКА
+      - name: Build & Push BACK Image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./back
+          file: ./back/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_IMAGE_BACK }}:latest
+
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+
+          script: |
+            echo "=== Logging into Docker on server ==="
+            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USER }}" --password-stdin
+
+            echo "=== Pulling latest images ==="
+            docker pull ${{ secrets.DOCKER_IMAGE_BACK }}:latest
+            docker pull ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
+
+            echo "=== Stopping old containers ==="
+            docker stop ouroboros-back-container || true
+            docker rm ouroboros-back-container || true
+            docker stop ouroboros-front-container || true
+            docker rm ouroboros-front-container || true
+
+            echo "=== Starting new containers ==="
+            docker run -d --name ouroboros-back-container -p 8000:8000 --restart unless-stopped ${{ secrets.DOCKER_IMAGE_BACK }}:latest
             docker run -d --name ouroboros-front-container -p 80:80 --restart unless-stopped ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
 
-            echo "Deployment completed successfully!"
-
+            echo "=== Deploy completed successfully ==="
