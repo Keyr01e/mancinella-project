@@ -30,7 +30,7 @@ jobs:
       - name: Build & Push FRONT image
         uses: docker/build-push-action@v4
         with:
-          context: ./Ouroboros-front
+          context: ./front
           file: Dockerfile
           push: true
           tags: |
@@ -39,7 +39,7 @@ jobs:
       - name: Build & Push BACK image
         uses: docker/build-push-action@v4
         with:
-          context: ./Ouroboros-back
+          context: ./back
           file: Dockerfile
           push: true
           tags: |
