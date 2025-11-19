@@ -12,14 +12,33 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      # 1. Клонируем основной репозиторий
+      - name: Checkout main repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # полное клонирование, без submodules
+          fetch-depth: 0
 
+      # 2. Клонируем фронт в подпапку front
+      - name: Checkout Ouroboros-front
+        uses: actions/checkout@v4
+        with:
+          repository: Keyr01e/Ouroboros-front
+          path: front
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 3. Клонируем бэк в подпапку back
+      - name: Checkout Ouroboros-back
+        uses: actions/checkout@v4
+        with:
+          repository: Keyr01e/Ouroboros-back
+          path: back
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 4. Настраиваем Docker Buildx
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # 5. Логинимся в Docker registry
       - name: Login to Docker registry
         uses: docker/login-action@v3
         with:
@@ -27,23 +46,23 @@ jobs:
           username: ${{ secrets.DOCKER_USER }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      # 6. Сборка и пуш Docker образа фронта
       - name: Build & Push FRONT image
         uses: docker/build-push-action@v4
         with:
           context: ./front
           file: Dockerfile
           push: true
-          tags: |
-            ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
+          tags: ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
 
+      # 7. Сборка и пуш Docker образа бэка
       - name: Build & Push BACK image
         uses: docker/build-push-action@v4
         with:
           context: ./back
           file: Dockerfile
           push: true
-          tags: |
-            ${{ secrets.DOCKER_IMAGE_BACK }}:latest
+          tags: ${{ secrets.DOCKER_IMAGE_BACK }}:latest
 
   deploy:
     needs: build-and-push
