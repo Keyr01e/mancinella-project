@@ -1,198 +1,32 @@
-name: CI/CD - Build & Deploy (Front + Back)
+name: CI/CD - Debug Secrets & Deploy
 
 on:
+  workflow_dispatch:
   push:
     branches: [ "main" ]
 
 jobs:
-  build-and-push:
+  debug:
     runs-on: ubuntu-latest
     steps:
-      # 1. Checkout репозитория
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Логируем секреты (только для проверки)
-      - name: Check Docker secrets
+      - name: Print Git info
         run: |
-          if [ -z "${{ secrets.DOCKER_USER }}" ]; then
-            echo "DOCKER_USER is empty!"
-            exit 1
-          else
-            echo "DOCKER_USER is set: ${{ secrets.DOCKER_USER }}"
-          fi
-          if [ -z "${{ secrets.DOCKER_PASSWORD }}" ]; then
-            echo "DOCKER_PASSWORD is empty!"
-            exit 1
-          else
-            echo "DOCKER_PASSWORD is set."
-          fi
+          echo "Branch: $GITHUB_REF"
+          git --no-pager branch -a || true
 
-      # 3. Setup Docker Buildx
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # 4. Login в Docker
-      - name: Login to Docker registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.DOCKER_REGISTRY || 'docker.io' }}
-          username: ${{ secrets.DOCKER_USER }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      # 5. Build & Push FRONT image
-      - name: Build & Push FRONT Image
-        uses: docker/build-push-action@v4
-        with:
-          context: ./front
-          file: ./front/Dockerfile
-          push: true
-          tags: ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
-
-      # 6. Build & Push BACK image
-      - name: Build & Push BACK Image
-        uses: docker/build-push-action@v4
-        with:
-          context: ./back
-          file: ./back/Dockerfile
-          push: true
-          tags: ${{ secrets.DOCKER_IMAGE_BACK }}:latest
-
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
-      # 7. Deploy на сервер через SSH
-      - name: Deploy over SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          port: ${{ secrets.SERVER_PORT || 22 }}
-          timeout: 30m
-          script: |
-            set -e
-            echo "Logging into Docker registry on server..."
-            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login ${{ secrets.DOCKER_REGISTRY || 'docker.io' }} -u "${{ secrets.DOCKER_USER }}" --password-stdin
-
-            echo "Pulling latest images..."
-            docker pull ${{ secrets.DOCKER_IMAGE_BACK }}:latest
-            docker pull ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
-
-            echo "Stopping old containers..."
-            docker stop ouroboros-back-container || true
-            docker rm ouroboros-back-container || true
-            docker stop ouroboros-front-container || true
-            docker rm ouroboros-front-container || true
-
-            echo "Starting BACK container..."
-            docker run -d -
-name: CI/CD - Build & Deploy (Front + Back)
-
-on:
-  push:
-    branches: [ "main" ]
-
-jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # 🔥 ЛОГИРОВАНИЕ СЕКРЕТОВ (без показa паролей)
-      - name: Check required secrets
+      - name: Print environment keys related to docker (masked)
         run: |
-          echo "=== Checking secrets availability ==="
+          echo "---- ENV (filter docker/server) ----"
+          printenv | egrep -i 'DOCKER|SERVER' || true
 
-          if [ -z "${{ secrets.DOCKER_USER }}" ]; then
-            echo "::error::❌ DOCKER_USER is EMPTY. Add it in Settings → Secrets → Actions"
-            exit 1
-          else
-            echo "✔ DOCKER_USER is set: ${{ secrets.DOCKER_USER }}"
-          fi
-
-          if [ -z "${{ secrets.DOCKER_PASSWORD }}" ]; then
-            echo "::error::❌ DOCKER_PASSWORD is EMPTY."
-            exit 1
-          else
-            echo "✔ DOCKER_PASSWORD is set."
-          fi
-
-          if [ -z "${{ secrets.DOCKER_IMAGE_FRONT }}" ]; then
-            echo "::error::❌ DOCKER_IMAGE_FRONT is EMPTY."
-            exit 1
-          else
-            echo "✔ DOCKER_IMAGE_FRONT = ${{ secrets.DOCKER_IMAGE_FRONT }}"
-          fi
-
-          if [ -z "${{ secrets.DOCKER_IMAGE_BACK }}" ]; then
-            echo "::error::❌ DOCKER_IMAGE_BACK is EMPTY."
-            exit 1
-          else
-            echo "✔ DOCKER_IMAGE_BACK = ${{ secrets.DOCKER_IMAGE_BACK }}"
-          fi
-
-          echo "=== Secrets check passed ==="
-
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # 🔥 ЛОГИН В DOCKER HUB
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USER }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      # 🔥 БИЛД И ПУШ ФРОНТА
-      - name: Build & Push FRONT Image
-        uses: docker/build-push-action@v4
-        with:
-          context: ./front
-          file: ./front/Dockerfile
-          push: true
-          tags: ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
-
-      # 🔥 БИЛД И ПУШ БЭКА
-      - name: Build & Push BACK Image
-        uses: docker/build-push-action@v4
-        with:
-          context: ./back
-          file: ./back/Dockerfile
-          push: true
-          tags: ${{ secrets.DOCKER_IMAGE_BACK }}:latest
-
-
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          port: ${{ secrets.SERVER_PORT || 22 }}
-
-          script: |
-            echo "=== Logging into Docker on server ==="
-            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USER }}" --password-stdin
-
-            echo "=== Pulling latest images ==="
-            docker pull ${{ secrets.DOCKER_IMAGE_BACK }}:latest
-            docker pull ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
-
-            echo "=== Stopping old containers ==="
-            docker stop ouroboros-back-container || true
-            docker rm ouroboros-back-container || true
-            docker stop ouroboros-front-container || true
-            docker rm ouroboros-front-container || true
-
-            echo "=== Starting new containers ==="
-            docker run -d --name ouroboros-back-container -p 8000:8000 --restart unless-stopped ${{ secrets.DOCKER_IMAGE_BACK }}:latest
-            docker run -d --name ouroboros-front-container -p 80:80 --restart unless-stopped ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
-
-            echo "=== Deploy completed successfully ==="
+      - name: Check secrets existence (safe)
+        run: |
+          if [ -z "${{ secrets.DOCKER_USER }}" ]; then echo "::error::DOCKER_USER is EMPTY"; else echo "::warning::DOCKER_USER is SET"; fi
+          if [ -z "${{ secrets.DOCKER_PASSWORD }}" ]; then echo "::error::DOCKER_PASSWORD is EMPTY"; else echo "::warning::DOCKER_PASSWORD is SET"; fi
+          if [ -z "${{ secrets.DOCKER_IMAGE_FRONT }}" ]; then echo "::error::DOCKER_IMAGE_FRONT is EMPTY"; else echo "::warning::DOCKER_IMAGE_FRONT is SET"; fi
+          if [ -z "${{ secrets.DOCKER_IMAGE_BACK }}" ]; then echo "::error::DOCKER_IMAGE_BACK is EMPTY"; else echo "::warning::DOCKER_IMAGE_BACK is SET"; fi
+          if [ -z "${{ secrets.SERVER_HOST }}" ]; then echo "::error::SERVER_HOST is EMPTY"; else echo "::warning::SERVER_HOST is SET"; fi
+          if [ -z "${{ secrets.SERVER_SSH_KEY }}" ]; then echo "::error::SERVER_SSH_KEY is EMPTY"; else echo "::warning::SERVER_SSH_KEY is SET"; fi
