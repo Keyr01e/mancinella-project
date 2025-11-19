@@ -29,7 +29,7 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           context: ./front
-          file: ./front/Dockerfile
+          file: Dockerfile
           push: true
           tags: |
             ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
@@ -38,7 +38,7 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           context: ./back
-          file: ./back/Dockerfile
+          file: Dockerfile
           push: true
           tags: |
             ${{ secrets.DOCKER_IMAGE_BACK }}:latest
@@ -60,15 +60,17 @@ jobs:
             echo "Logging into Docker registry on server..."
             echo "${{ secrets.DOCKER_PASSWORD }}" | docker login ${{ env.DOCKER_REGISTRY }} -u "${{ secrets.DOCKER_USER }}" --password-stdin
 
+            # Pull latest images
             docker pull ${{ secrets.DOCKER_IMAGE_BACK }}:latest
             docker pull ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
 
+            # Stop and remove old containers
             docker stop ouroboros-back-container || true
             docker rm ouroboros-back-container || true
 
             docker stop ouroboros-front-container || true
             docker rm ouroboros-front-container || true
 
+            # Run new containers
             docker run -d --name ouroboros-back-container -p 8000:8000 --restart unless-stopped ${{ secrets.DOCKER_IMAGE_BACK }}:latest
-
             docker run -d --name ouroboros-front-container -p 80:80 --restart unless-stopped ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
