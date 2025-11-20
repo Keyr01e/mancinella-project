@@ -2,7 +2,7 @@ name: CI/CD - Build & Deploy (Front + Back)
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
   workflow_dispatch:
 
 env:
@@ -12,25 +12,14 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     steps:
-      # 1. Клонируем основной репозиторий
-      - name: Checkout main repository
+      - name: Checkout repository with submodules
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          submodules: recursive
 
-      # 2. Клонируем фронт в подпапку front
-      - name: Clone Ouroboros-front
-        run: git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/Keyr01e/Ouroboros-front.git front
-
-      # 3. Клонируем бэк в подпапку back
-      - name: Clone Ouroboros-back
-        run: git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/Keyr01e/Ouroboros-back.git back
-
-      # 4. Настраиваем Docker Buildx
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 5. Логинимся в Docker registry
       - name: Login to Docker registry
         uses: docker/login-action@v3
         with:
@@ -38,23 +27,23 @@ jobs:
           username: ${{ secrets.DOCKER_USER }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # 6. Сборка и пуш Docker образа фронта
       - name: Build & Push FRONT image
         uses: docker/build-push-action@v4
         with:
           context: ./front
-          file: Dockerfile
+          file: ./front/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
+          tags: |
+            ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
 
-      # 7. Сборка и пуш Docker образа бэка
       - name: Build & Push BACK image
         uses: docker/build-push-action@v4
         with:
           context: ./back
-          file: Dockerfile
+          file: ./back/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKER_IMAGE_BACK }}:latest
+          tags: |
+            ${{ secrets.DOCKER_IMAGE_BACK }}:latest
 
   deploy:
     needs: build-and-push
@@ -70,20 +59,17 @@ jobs:
           timeout: 30m
           script: |
             set -e
-            echo "Logging into Docker registry on server..."
             echo "${{ secrets.DOCKER_PASSWORD }}" | docker login ${{ env.DOCKER_REGISTRY }} -u "${{ secrets.DOCKER_USER }}" --password-stdin
 
-            # Pull latest images
             docker pull ${{ secrets.DOCKER_IMAGE_BACK }}:latest
             docker pull ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
 
-            # Stop and remove old containers
             docker stop ouroboros-back-container || true
             docker rm ouroboros-back-container || true
 
             docker stop ouroboros-front-container || true
             docker rm ouroboros-front-container || true
 
-            # Run new containers
             docker run -d --name ouroboros-back-container -p 8000:8000 --restart unless-stopped ${{ secrets.DOCKER_IMAGE_BACK }}:latest
+
             docker run -d --name ouroboros-front-container -p 80:80 --restart unless-stopped ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
