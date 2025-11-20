@@ -1,0 +1,33 @@
+Suggested patch for websocket.py to forward JSON signalling and message payloads to specific users, and to broadcast join events.
+
+Example implementation:
+
+import json
+
+@router.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: int):
+    await manager.connect(websocket, user_id)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                payload = json.loads(data)
+                # Signalling: offer/answer/candidate to specific receiver
+                if payload.get('type') in ('offer','answer','candidate') and payload.get('receiver_id'):
+                    payload['sender_id'] = user_id
+                    await manager.send_personal_message(json.dumps(payload), payload.get('receiver_id'))
+                    continue
+                # Join event: notify others in same room
+                if payload.get('type') == 'join':
+                    payload['sender_id'] = user_id
+                    await manager.broadcast(json.dumps(payload))
+                    continue
+                # Chat message payload -> broadcast and optionally save
+                if payload.get('type') == 'message' and payload.get('data'):
+                    await manager.broadcast(json.dumps(payload))
+                    continue
+            except json.JSONDecodeError:
+                await manager.broadcast(f"User {user_id}: {data}")
+    except WebSocketDisconnect:
+        manager.disconnect(user_id)
+        await manager.broadcast(f"User {user_id} left the chat")

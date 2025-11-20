@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auth Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #0f1115;
+            color: #e6eef8;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            background: #0f1724;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .auth-form {
+            background: #0f1724;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        input {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            background: #111;
+            border: 1px solid rgba(255,255,255,0.1);
+            color: #e6eef8;
+            border-radius: 4px;
+        }
+        button {
+            background: #5865f2;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #4752c4;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Auth Test</h1>
+        
+        <div class="status" id="status">
+            <strong>Status:</strong> <span id="statusText">Checking...</span>
+        </div>
+        
+        <div id="authForm" class="auth-form" style="display: none;">
+            <h3>Login</h3>
+            <input type="text" id="username" placeholder="Username">
+            <input type="password" id="password" placeholder="Password">
+            <button onclick="testAuth()">Test Auth</button>
+            <button onclick="clearAuth()">Clear Auth</button>
+        </div>
+        
+        <div id="mainApp" style="display: none;">
+            <h3>Main App (Authenticated)</h3>
+            <p>User ID: <span id="userId"></span></p>
+            <p>Token: <span id="token"></span></p>
+            <button onclick="logout()">Logout</button>
+        </div>
+    </div>
+
+    <script>
+        function checkAuth() {
+            const token = localStorage.getItem('token');
+            const userId = localStorage.getItem('user_id');
+            
+            console.log('Checking auth:', { token, userId });
+            
+            if (token && token.startsWith('Bearer ') && userId) {
+                document.getElementById('statusText').textContent = 'Authenticated';
+                document.getElementById('status').style.background = '#1a4d1a';
+                document.getElementById('authForm').style.display = 'none';
+                document.getElementById('mainApp').style.display = 'block';
+                document.getElementById('userId').textContent = userId;
+                document.getElementById('token').textContent = token.substring(0, 20) + '...';
+            } else {
+                document.getElementById('statusText').textContent = 'Not authenticated';
+                document.getElementById('status').style.background = '#4d1a1a';
+                document.getElementById('authForm').style.display = 'block';
+                document.getElementById('mainApp').style.display = 'none';
+            }
+        }
+        
+        function testAuth() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            if (!username || !password) {
+                alert('Please enter username and password');
+                return;
+            }
+            
+            // Simulate auth
+            const token = 'Bearer test_token_' + Date.now();
+            const userId = 'user_' + Date.now();
+            
+            localStorage.setItem('token', token);
+            localStorage.setItem('user_id', userId);
+            
+            console.log('Auth set:', { token, userId });
+            checkAuth();
+        }
+        
+        function clearAuth() {
+            localStorage.removeItem('token');
+            localStorage.removeItem('user_id');
+            console.log('Auth cleared');
+            checkAuth();
+        }
+        
+        function logout() {
+            localStorage.removeItem('token');
+            localStorage.removeItem('user_id');
+            console.log('Logged out');
+            checkAuth();
+        }
+        
+        // Check auth on page load
+        checkAuth();
+    </script>
+</body>
+</html>
+
