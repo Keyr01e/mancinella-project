@@ -28,9 +28,6 @@ jobs:
           context: ./front
           file: ./front/Dockerfile
           push: true
-          build-args: |
-            VITE_API_URL=http://5.128.22.177:8000
-            VITE_WS_URL=ws://5.128.22.177:8000/ws
           tags: ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
 
       # ---------- BACK ----------
