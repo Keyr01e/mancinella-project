@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { API_URL } from './config'
 export default function Auth({onAuth}){
   const [mode,setMode]=useState('login'); const [username,setUsername]=useState(''); const [password,setPassword]=useState(''); const [err,setErr]=useState('')
   async function submit(e){ 
@@ -10,7 +11,7 @@ export default function Auth({onAuth}){
         const body=new URLSearchParams(); 
         body.append('username',username); 
         body.append('password',password); 
-        const res=await fetch('/api/v1/users/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}); 
+        const res=await fetch(`${API_URL}/api/v1/users/token`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}); 
         if(!res.ok){ const t=await res.text(); throw new Error(t||res.status) } 
         const data=await res.json(); 
         const token=data.access_token||data.token; 
@@ -22,12 +23,12 @@ export default function Auth({onAuth}){
         localStorage.setItem('username',username_from_api); 
         onAuth&&onAuth({token:'Bearer '+token,user_id,username:username_from_api}) 
       } else { 
-        const res=await fetch('/api/v1/users/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})}); 
+        const res=await fetch(`${API_URL}/api/v1/users/register`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})}); 
         if(!res.ok){ const t=await res.text(); throw new Error(t||res.status) } 
         const body=new URLSearchParams(); 
         body.append('username',username); 
         body.append('password',password); 
-        const loginRes=await fetch('/api/v1/users/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}); 
+        const loginRes=await fetch(`${API_URL}/api/v1/users/token`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body}); 
         if(!loginRes.ok){ const t=await loginRes.text(); throw new Error(t||loginRes.status) } 
         const loginData=await loginRes.json(); 
         const token=loginData.access_token||loginData.token; 

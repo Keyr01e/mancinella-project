@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { API_URL } from './config';
 
 export default function AuthPage({ onLogin }) {
   const [mode, setMode] = useState('login');
@@ -13,29 +14,33 @@ export default function AuthPage({ onLogin }) {
       let url, body, headers;
 
       if (mode === 'login') {
-        url = '/api/v1/users/token';
+        url = `${API_URL}/api/v1/users/token`;
+
         body = new URLSearchParams();
         body.append('username', username);
         body.append('password', password);
         headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
       } else {
-        url = '/api/v1/users/register';
+        url = `${API_URL}/api/v1/users/register`;
+
         body = JSON.stringify({ username, password });
         headers = { 'Content-Type': 'application/json' };
       }
 
       const res = await fetch(url, { method: 'POST', headers, body });
+
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
 
       let token = data.access_token || data.token;
       if (mode === 'register' && !token) {
         // auto-login after register
-        const loginRes = await fetch('/api/v1/users/token', {
+        const loginRes = await fetch(`${API_URL}/api/v1/users/token`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({ username, password }),
         });
+
         const loginData = await loginRes.json();
         token = loginData.access_token || loginData.token;
       }
