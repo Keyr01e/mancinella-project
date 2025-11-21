@@ -68,8 +68,17 @@ jobs:
             docker run -d \
               --name ouroboros-back-container \
               -p 8000:8000 \
+              -e DATABASE_URL=${{ secrets.DATABASE_URL }} \
+              -e SECRET_KEY=${{ secrets.SECRET_KEY }} \
+              -e ALGORITHM=HS256 \
+              -e ACCESS_TOKEN_EXPIRE_MINUTES=43200 \
               --restart unless-stopped \
               ${{ secrets.DOCKER_IMAGE_BACK }}:latest
+            
+            echo "Checking container status..."
+            docker ps
+            echo "Container logs:"
+            docker logs ouroboros-back-container
 
             echo "Starting FRONTEND..."
             docker run -d \
