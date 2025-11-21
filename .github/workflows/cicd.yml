@@ -90,4 +90,9 @@ jobs:
               --restart unless-stopped \
               ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
 
+            echo "Checking FRONT container status..."
+            docker ps
+            echo "FRONT container logs:"
+            docker logs ouroboros-front-container || true
+
             echo "Deployment complete."
