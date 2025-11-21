@@ -1,19 +1,24 @@
-# ./back/Dockerfile
 FROM python:3.12-slim
 
-# Устанавливаем рабочую директорию
+# Чтобы не было ошибок при сборке
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# Копируем зависимости и устанавливаем их
+# Устанавливаем системные пакеты (если нужно)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Устанавливаем зависимости отдельно (кеш)
 COPY requirements.txt .
+
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем весь код
+# Копируем весь проект
 COPY . .
 
-# Указываем порт, который будет доступен снаружи
 EXPOSE 8000
 
-# Команда для запуска (замени на свою, если используешь другой сервер)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
-
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
