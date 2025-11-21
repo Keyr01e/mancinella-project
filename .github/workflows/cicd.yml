@@ -84,6 +84,7 @@ jobs:
             docker run -d \
               --name ouroboros-front-container \
               -p 80:80 \
+              -p 8080:80 \
               --restart unless-stopped \
               ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
 
