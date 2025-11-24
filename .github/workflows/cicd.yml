@@ -1,96 +1,130 @@
-name: CI/CD - Build & Deploy (Front + Back)
+name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Docker Registry
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USER }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      # ---------- FRONT ----------
-      - name: Build & Push FRONT image
-        uses: docker/build-push-action@v4
-        with:
-          context: ./front
-          file: ./front/Dockerfile
-          push: true
-          tags: ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
-
-      # ---------- BACK ----------
-      - name: Build & Push BACK image
-        uses: docker/build-push-action@v4
-        with:
-          context: ./back
-          file: ./back/Dockerfile
-          push: true
-          tags: ${{ secrets.DOCKER_IMAGE_BACK }}:latest
-
   deploy:
-    needs: build-and-push
     runs-on: ubuntu-latest
-
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          password: ${{ secrets.SERVER_PASSWORD }}
-          port: ${{ secrets.SERVER_PORT }}
-          script: |
-            set -e
+    - name: Клонирование репозитория
+      uses: actions/checkout@v4
 
-            echo "Pulling new Docker images..."
-            docker pull ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
-            docker pull ${{ secrets.DOCKER_IMAGE_BACK }}:latest
+    - name: Настройка Docker Buildx
+      uses: docker/setup-buildx-action@v3
 
-            echo "Stopping old containers..."
-            docker stop ouroboros-front-container || true
-            docker rm ouroboros-front-container || true
-            docker stop ouroboros-back-container || true
-            docker rm ouroboros-back-container || true
+    - name: Вход в GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
-            echo "Starting BACKEND..."
-            docker run -d \
-              --name ouroboros-back-container \
-              -p 8000:8000 \
-              -e DATABASE_URL=${{ secrets.DATABASE_URL }} \
-              -e SECRET_KEY=${{ secrets.SECRET_KEY }} \
-              -e ALGORITHM=HS256 \
-              -e ACCESS_TOKEN_EXPIRE_MINUTES=43200 \
-              --restart unless-stopped \
-              ${{ secrets.DOCKER_IMAGE_BACK }}:latest
-            
-            echo "Checking container status..."
-            docker ps
-            echo "Container logs:"
-            docker logs ouroboros-back-container
+    - name: Сборка и загрузка бэкенда
+      uses: docker/build-push-action@v5
+      with:
+        context: ./back
+        push: true
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
 
-            echo "Starting FRONTEND..."
-            docker run -d \
-              --name ouroboros-front-container \
-              -p 80:80 \
-              -p 8080:80 \
-              --restart unless-stopped \
-              ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
+    - name: Сборка и загрузка фронтенда
+      uses: docker/build-push-action@v5
+      with:
+        context: ./front
+        push: true
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
 
-            echo "Checking FRONT container status..."
-            docker ps
-            echo "FRONT container logs:"
-            docker logs ouroboros-front-container || true
+    - name: Деплой через SSH
+      uses: appleboy/ssh-action@v1.2.0
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        password: ${{ secrets.SERVER_PASSWORD }}
+        port: ${{ secrets.SERVER_PORT }}
+        script: |
+          set -e
+          
+          # Вход в GitHub Container Registry
+          echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          
+          echo "Загрузка новых образов..."
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:latest
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:latest
 
-            echo "Deployment complete."
+          echo "Остановка старых контейнеров..."
+          docker stop ouroboros-front-container || true
+          docker rm ouroboros-front-container || true
+          docker stop ouroboros-back-container || true
+          docker rm ouroboros-back-container || true
+
+          echo "Создание сети Caddy, если её нет..."
+          docker network create caddy 2>/dev/null || true
+
+          echo "Запуск БЭКЕНДА..."
+          docker run -d \
+            --name ouroboros-back-container \
+            --network caddy \
+            -e DATABASE_URL=${{ secrets.DATABASE_URL }} \
+            -e SECRET_KEY=${{ secrets.SECRET_KEY }} \
+            -e ALGORITHM=HS256 \
+            -e ACCESS_TOKEN_EXPIRE_MINUTES=43200 \
+            --restart unless-stopped \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:latest
+          
+          echo "Запуск ФРОНТЕНДА..."
+          docker run -d \
+            --name ouroboros-front-container \
+            --network caddy \
+            -e API_URL=https://www.mancinella.ru/api \
+            --restart unless-stopped \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:latest
+
+          echo "Обновление конфигурации Caddy..."
+          cat > Caddyfile << 'EOL'
+          {
+              admin "unix//run/caddy/admin.socket"
+          }
+
+          # Редирект на www
+          mancinella.ru {
+              redir https://www.mancinella.ru{uri} 308
+          }
+
+          # Основной домен
+          www.mancinella.ru {
+              # Прокси для API
+              handle_path /api/* {
+                  reverse_proxy ouroboros-back-container:8000
+              }
+              
+              # Фронтенд
+              handle {
+                  reverse_proxy ouroboros-front-container:80
+              }
+              
+              # SSL сертификат
+              tls /etc/caddy/ssl/mancinella.ru/fullchain.pem /etc/caddy/ssl/mancinella.ru/privkey.pem
+          }
+          EOL
+
+          echo "Копирование Caddyfile и перезапуск Caddy..."
+          sudo cp Caddyfile /etc/caddy/Caddyfile
+          sudo chown caddy:caddy /etc/caddy/Caddyfile
+          sudo systemctl restart caddy
+
+          echo "Деплой успешно завершен!"
+          echo "Фронтенд: https://www.mancinella.ru"
+          echo "API: https://www.mancinella.ru/api"
