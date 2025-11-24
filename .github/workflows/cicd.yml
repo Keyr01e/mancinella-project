@@ -91,11 +91,9 @@ jobs:
             mkdir -p ~/nginx_conf
             mkdir -p ~/nginx_ssl
 
-            # Copy SSL files (certificate.crt, certificate.key, certificate_ca.crt)
             cp /etc/nginx/ssl/mancinella.ru/certificate.* ~/nginx_ssl/ 2>/dev/null || true
             chmod 600 ~/nginx_ssl/* 2>/dev/null || true
 
-            # Create nginx.conf
             cat > ~/nginx_conf/nginx.conf << 'EOL'
 user  nginx;
 worker_processes  auto;
@@ -120,14 +118,12 @@ http {
     sendfile        on;
     keepalive_timeout  65;
 
-    # Redirect HTTP to HTTPS
     server {
         listen 80;
         server_name mancinella.ru www.mancinella.ru;
         return 301 https://$host$request_uri;
     }
 
-    # HTTPS server
     server {
         listen 443 ssl http2;
         server_name mancinella.ru www.mancinella.ru;
