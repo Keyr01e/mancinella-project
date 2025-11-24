@@ -1,125 +1,191 @@
-      deploy:
-        needs: build-and-push
-        runs-on: ubuntu-latest
+name: CI/CD - Build & Deploy (Front + Back)
 
-        steps:
-          - name: Deploy via SSH
-            uses: appleboy/ssh-action@v1.2.0
-            with:
-              host: ${{ secrets.SERVER_HOST }}
-              username: ${{ secrets.SERVER_USER }}
-              password: ${{ secrets.SERVER_PASSWORD }}
-              port: ${{ secrets.SERVER_PORT }}
-              script: |
-                set -e
-                echo "Pulling new Docker images..."
-                docker pull ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
-                docker pull ${{ secrets.DOCKER_IMAGE_BACK }}:latest
+on:
+  push:
+    branches: [ "main" ]
 
-                echo "Stopping old containers..."
-                docker stop ouroboros-front-container || true
-                docker rm ouroboros-front-container || true
-                docker stop ouroboros-back-container || true
-                docker rm ouroboros-back-container || true
-                docker stop nginx-proxy || true
-                docker rm nginx-proxy || true
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-                echo "Creating Docker network if not exists..."
-                docker network create nginx_network 2>/dev/null || true
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-                # Запуск контейнеров...
-                docker run -d --name ouroboros-back-container --network nginx_network \
-                  -e DATABASE_URL=${{ secrets.DATABASE_URL }} \
-                  -e SECRET_KEY=${{ secrets.SECRET_KEY }} \
-                  -e ALGORITHM=HS256 \
-                  -e ACCESS_TOKEN_EXPIRE_MINUTES=43200 \
-                  --restart unless-stopped \
-                  ${{ secrets.DOCKER_IMAGE_BACK }}:latest
+      - name: Login to Docker Registry
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-                docker run -d --name ouroboros-front-container --network nginx_network \
-                  -e API_URL=/api \
-                  --restart unless-stopped \
-                  ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
+      - name: Build & Push FRONT image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./front
+          file: ./front/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
+          cache-from: type=registry,ref=${{ secrets.DOCKER_IMAGE_FRONT }}:latest
+          cache-to: type=inline
 
-                echo "Creating Nginx config..."
-                mkdir -p ~/nginx_conf
-                mkdir -p ~/nginx_ssl
-                cp /etc/nginx/ssl/mancinella.ru/certificate.* ~/nginx_ssl/ 2>/dev/null || true
-                chmod 600 ~/nginx_ssl/* 2>/dev/null || true
+      - name: Build & Push BACK image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./back
+          file: ./back/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_IMAGE_BACK }}:latest
+          cache-from: type=registry,ref=${{ secrets.DOCKER_IMAGE_BACK }}:latest
+          cache-to: type=inline
 
-                # Ниже block cat — EOL должен начинаться без пробелов!
-                cat > ~/nginx_conf/nginx.conf << 'EOL'
-user  nginx;
-worker_processes  auto;
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            set -e
 
-error_log  /var/log/nginx/error.log notice;
-pid        /var/run/nginx.pid;
+            echo "--- 1. Pulling new Docker images ---"
+            docker pull "${{ secrets.DOCKER_IMAGE_FRONT }}:latest"
+            docker pull "${{ secrets.DOCKER_IMAGE_BACK }}:latest"
 
-events {
-    worker_connections  1024;
-}
+            echo "--- 2. Stopping old containers ---"
+            for c in nginx-proxy ouroboros-front-container ouroboros-back-container; do
+              if [ "$(docker ps -q -f name=$c)" ]; then
+                  docker stop $c
+              fi
+              if [ "$(docker ps -aq -f name=$c)" ]; then
+                  docker rm $c
+              fi
+            done
 
-http {
-    include       /etc/nginx/mime.types;
-    default_type  application/octet-stream;
+            echo "--- 3. Network Setup ---"
+            docker network create nginx_network 2>/dev/null || true
 
-    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
-                      '$status $body_bytes_sent "$http_referer" '
-                      '"$http_user_agent" "$http_x_forwarded_for"';
+            echo "--- 4. Preparing SSL Certificates ---"
+            # Создаем локальные папки под текущим пользователем
+            mkdir -p ~/nginx_conf ~/nginx_ssl
 
-    access_log  /var/log/nginx/access.log  main;
+            # Копируем сертификаты с системного пути (нужен sudo)
+            # Используем -L чтобы следовать по симлинкам (важно для Let's Encrypt)
+            echo "Copying certs from /etc/nginx/ssl/mancinella/..."
+            sudo cp -L /etc/nginx/ssl/mancinella/certificate.crt ~/nginx_ssl/
+            sudo cp -L /etc/nginx/ssl/mancinella/certificate.key ~/nginx_ssl/
+            
+            # Если у вас есть файл цепочки CA, раскомментируйте строку ниже:
+            # sudo cp -L /etc/nginx/ssl/mancinella/certificate_ca.crt ~/nginx_ssl/ || true
 
-    sendfile        on;
-    keepalive_timeout  65;
+            # Выставляем права, чтобы Docker (и Nginx внутри) могли читать файлы
+            sudo chown -R $USER:$USER ~/nginx_ssl
+            sudo chmod 644 ~/nginx_ssl/certificate.crt
+            sudo chmod 600 ~/nginx_ssl/certificate.key
 
-    server {
-        listen 80;
-        server_name mancinella.ru www.mancinella.ru;
-        return 301 https://$host$request_uri;
-    }
+            echo "--- 5. Starting Containers ---"
+            
+            # BACKEND
+            docker run -d \
+              --name ouroboros-back-container \
+              --network nginx_network \
+              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              -e SECRET_KEY="${{ secrets.SECRET_KEY }}" \
+              -e ALGORITHM=HS256 \
+              -e ACCESS_TOKEN_EXPIRE_MINUTES=43200 \
+              --restart unless-stopped \
+              "${{ secrets.DOCKER_IMAGE_BACK }}:latest"
 
-    server {
-        listen 443 ssl http2;
-        server_name mancinella.ru www.mancinella.ru;
+            # FRONTEND
+            docker run -d \
+              --name ouroboros-front-container \
+              --network nginx_network \
+              -e API_URL=/api \
+              --restart unless-stopped \
+              "${{ secrets.DOCKER_IMAGE_FRONT }}:latest"
 
-        ssl_certificate /etc/nginx/ssl/certificate.crt;
-        ssl_certificate_key /etc/nginx/ssl/certificate.key;
-        ssl_trusted_certificate /etc/nginx/ssl/certificate_ca.crt;
+            echo "--- 6. Generating Nginx Config ---"
+            # Важно: используем 'EOL' в кавычках, чтобы bash не пытался подставить переменные $host и т.д.
+            cat > ~/nginx_conf/nginx.conf << 'EOL'
+            user  nginx;
+            worker_processes auto;
+            error_log /var/log/nginx/error.log notice;
+            pid /var/run/nginx.pid;
 
-        ssl_protocols TLSv1.2 TLSv1.3;
-        ssl_prefer_server_ciphers on;
-        ssl_ciphers "EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH";
-        ssl_ecdh_curve secp384r1;
-        ssl_session_cache shared:SSL:10m;
-        ssl_session_tickets off;
-        ssl_stapling on;
-        ssl_stapling_verify on;
+            events {
+                worker_connections 1024;
+            }
 
-        location /api/ {
-            proxy_pass http://ouroboros-back-container:8000/;
-            proxy_http_version 1.1;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection "upgrade";
-        }
+            http {
+                include /etc/nginx/mime.types;
+                default_type application/octet-stream;
+                log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                                '$status $body_bytes_sent "$http_referer" '
+                                '"$http_user_agent" "$http_x_forwarded_for"';
+                access_log /var/log/nginx/access.log main;
+                sendfile on;
+                keepalive_timeout 65;
+                client_max_body_size 20M; 
 
-        location / {
-            proxy_pass http://ouroboros-front-container:80/;
-            proxy_http_version 1.1;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-        }
+                server {
+                    listen 80;
+                    server_name mancinella.ru www.mancinella.ru;
+                    return 301 https://$host$request_uri;
+                }
 
-        location ~ /\. {
-            deny all;
-            access_log off;
-            log_not_found off;
-        }
-    }
-}
-EOL
+                server {
+                    listen 443 ssl http2;
+                    server_name mancinella.ru www.mancinella.ru;
+
+                    # ПУТИ ВНУТРИ КОНТЕЙНЕРА (монтируются в корень /etc/nginx/ssl)
+                    ssl_certificate /etc/nginx/ssl/certificate.crt;
+                    ssl_certificate_key /etc/nginx/ssl/certificate.key;
+                    # ssl_trusted_certificate /etc/nginx/ssl/certificate_ca.crt;
+
+                    ssl_protocols TLSv1.2 TLSv1.3;
+                    ssl_prefer_server_ciphers on;
+
+                    location /api/ {
+                        # Обратите внимание: слэш в конце 8000/ обрезает /api/ из запроса
+                        proxy_pass http://ouroboros-back-container:8000/;
+                        proxy_http_version 1.1;
+                        proxy_set_header Host $host;
+                        proxy_set_header X-Real-IP $remote_addr;
+                        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                        proxy_set_header X-Forwarded-Proto $scheme;
+                    }
+
+                    location / {
+                        proxy_pass http://ouroboros-front-container:80/;
+                        proxy_http_version 1.1;
+                        proxy_set_header Host $host;
+                        proxy_set_header X-Real-IP $remote_addr;
+                        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                        proxy_set_header X-Forwarded-Proto $scheme;
+                    }
+                }
+            }
+            EOL
+
+            echo "Starting Nginx..."
+            docker run -d \
+              --name nginx-proxy \
+              --network nginx_network \
+              -p 80:80 \
+              -p 443:443 \
+              -v ~/nginx_conf/nginx.conf:/etc/nginx/nginx.conf:ro \
+              -v ~/nginx_ssl:/etc/nginx/ssl:ro \
+              --restart unless-stopped \
+              nginx:alpine
+
+            echo "--- 7. Cleanup ---"
+            docker image prune -f
+
+            echo "Deployment complete!"
+            docker ps
