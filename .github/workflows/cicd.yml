@@ -87,8 +87,14 @@ jobs:
               --restart unless-stopped \
               ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
 
-            echo "Creating Nginx configuration..."
+            echo "Creating Nginx configuration and SSL directory..."
             mkdir -p ~/nginx_conf
+            mkdir -p ~/nginx_ssl
+            
+            # Copy certificates without sudo first
+            cp /etc/nginx/ssl/mancinella.ru/certificate.* ~/nginx_ssl/ 2>/dev/null || true
+            chmod 600 ~/nginx_ssl/* 2>/dev/null || true
+
             cat > ~/nginx_conf/nginx.conf << 'EOL'
             user  nginx;
             worker_processes  auto;
@@ -165,19 +171,14 @@ jobs:
             }
             EOL
 
-            echo "Creating Nginx SSL directory and copying certificates..."
-            sudo mkdir -p /etc/nginx/ssl
-            sudo cp /etc/nginx/ssl/mancinella.ru/certificate.* /etc/nginx/ssl/
-            sudo chmod 600 /etc/nginx/ssl/*
-
-            echo "Starting Nginx in Docker..."
+            echo "Starting Nginx in Docker with volume mounts..."
             docker run -d \
               --name nginx-proxy \
               --network nginx_network \
               -p 80:80 \
               -p 443:443 \
               -v ~/nginx_conf/nginx.conf:/etc/nginx/nginx.conf:ro \
-              -v /etc/nginx/ssl:/etc/nginx/ssl:ro \
+              -v ~/nginx_ssl:/etc/nginx/ssl:ro \
               --restart unless-stopped \
               nginx:alpine
 
