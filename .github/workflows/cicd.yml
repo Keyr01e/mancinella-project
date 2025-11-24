@@ -74,12 +74,16 @@ jobs:
             echo "--- 4. Preparing Filesystem ---"
             SSL_DIR="$HOME/nginx_ssl"
             CONF_DIR="$HOME/nginx_conf"
-            
-            # !!! НОВОЕ: Папка для Базы Данных на хосте !!!
             DATA_DIR="$HOME/app_data"
+            
+            # Создаем папку для базы
             mkdir -p "$DATA_DIR"
             
-            # Чистим конфиги Nginx, но НЕ ТРОГАЕМ DATA_DIR (чтобы база не стерлась)
+            # !!! ВАЖНО: Даем права на запись всем !!!
+            # SQLite внутри докера может работать от другого юзера.
+            # 777 решает проблему "Permission denied" наверняка.
+            echo "$SUDO_PASS" | sudo -S chmod 777 "$DATA_DIR"
+            
             echo "$SUDO_PASS" | sudo -S rm -rf "$SSL_DIR" "$CONF_DIR"
             mkdir -p "$SSL_DIR" "$CONF_DIR"
 
@@ -93,14 +97,15 @@ jobs:
             echo "--- 5. Starting App Containers ---"
             
             # BACKEND
-            # Добавили: -v "$DATA_DIR":/data
-            # Теперь папка /data внутри контейнера = папка ~/app_data на сервере
+            # Исправление: Монтируем в /app/data
+            # URL sqlite:///data/db.sqlite3 (3 слеша) будет искать файл в папке ./data
+            # Так как WORKDIR обычно /app, он найдет его в /app/data
             docker run -d --name ouroboros-back-container --network nginx_network \
               -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               -e SECRET_KEY="${{ secrets.SECRET_KEY }}" \
               -e ALGORITHM=HS256 \
               -e ACCESS_TOKEN_EXPIRE_MINUTES=43200 \
-              -v "$DATA_DIR":/data \
+              -v "$DATA_DIR":/app/data \
               --restart unless-stopped \
               "${{ secrets.DOCKER_IMAGE_BACK }}:latest" \
               uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --root-path /api
