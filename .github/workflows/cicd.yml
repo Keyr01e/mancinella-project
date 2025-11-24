@@ -1,4 +1,4 @@
-name: CI/CD - Final Production Fix
+name: CI/CD - Fix Frontend & Swagger
 
 on:
   push:
@@ -29,13 +29,11 @@ jobs:
           tags: ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
           cache-from: type=registry,ref=${{ secrets.DOCKER_IMAGE_FRONT }}:latest
           cache-to: type=inline
-          # !!! ИСПРАВЛЕНИЕ 1: Запекаем правильный URL в JS код при сборке !!!
-          # Мы ставим просто "/api", чтобы браузер сам подставил текущий домен
+          # Эти аргументы теперь будут приняты, если вы поправили Dockerfile
           build-args: |
             VITE_API_URL=/api
             REACT_APP_API_URL=/api
             API_URL=/api
-            NEXT_PUBLIC_API_URL=/api
 
       - name: Build & Push BACK image
         uses: docker/build-push-action@v4
@@ -67,54 +65,45 @@ jobs:
             docker pull "${{ secrets.DOCKER_IMAGE_FRONT }}:latest"
             docker pull "${{ secrets.DOCKER_IMAGE_BACK }}:latest"
 
-            echo "--- 2. Cleaning old containers ---"
+            echo "--- 2. Cleaning ---"
             docker rm -f nginx-proxy ouroboros-front-container ouroboros-back-container 2>/dev/null || true
 
             echo "--- 3. Network ---"
             docker network create nginx_network 2>/dev/null || true
 
-            echo "--- 4. Preparing SSL (Files exist) ---"
-            # Мы предполагаем, что файлы уже лежат на сервере после прошлого раза
+            echo "--- 4. SSL (Existing) ---"
             SSL_DIR="$HOME/nginx_ssl"
             CONF_DIR="$HOME/nginx_conf"
-            mkdir -p "$SSL_DIR" "$CONF_DIR"
-
-            # На всякий случай обновляем права, вдруг слетели
-            echo "$SUDO_PASS" | sudo -S cp -L /etc/nginx/ssl/mancinella/fullchain.crt "$SSL_DIR/certificate.crt"
-            echo "$SUDO_PASS" | sudo -S cp -L /etc/nginx/ssl/mancinella/site.key "$SSL_DIR/certificate.key"
+            # Обновляем права на всякий случай
             echo "$SUDO_PASS" | sudo -S chown -R $USER:$USER "$SSL_DIR"
-            chmod 644 "$SSL_DIR/certificate.crt"
-            chmod 644 "$SSL_DIR/certificate.key"
 
-            echo "--- 5. Starting App Containers ---"
+            echo "--- 5. Starting Containers ---"
             
-            # !!! ИСПРАВЛЕНИЕ 2: Исправляем Swagger !!!
-            # Добавляем ROOT_PATH=/api, чтобы FastAPI знал, что он за прокси
-            # Если твой бэкенд написан на Python/FastAPI, он подхватит это.
+            # БЭКЕНД: Мы переопределяем команду запуска (command), 
+            # чтобы включить прокси-заголовки и root-path. Это починит Swagger.
+            # Замените 'app.main:app' на ваш путь к приложению, если он другой!
             docker run -d --name ouroboros-back-container --network nginx_network \
               -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               -e SECRET_KEY="${{ secrets.SECRET_KEY }}" \
               -e ALGORITHM=HS256 \
               -e ACCESS_TOKEN_EXPIRE_MINUTES=43200 \
-              -e ROOT_PATH="/api" \
               --restart unless-stopped \
-              "${{ secrets.DOCKER_IMAGE_BACK }}:latest"
+              "${{ secrets.DOCKER_IMAGE_BACK }}:latest" \
+              uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --root-path /api
 
+            # ФРОНТЕНД
             docker run -d --name ouroboros-front-container --network nginx_network \
-              -e API_URL=/api \
               --restart unless-stopped \
               "${{ secrets.DOCKER_IMAGE_FRONT }}:latest"
 
-            echo "--- 6. Generating Nginx Config ---"
+            echo "--- 6. Nginx Config ---"
             cat > "$CONF_DIR/nginx.conf" << 'EOL'
             user  nginx;
             worker_processes auto;
             error_log /var/log/nginx/error.log notice;
             pid /var/run/nginx.pid;
 
-            events {
-                worker_connections 1024;
-            }
+            events { worker_connections 1024; }
 
             http {
                 include /etc/nginx/mime.types;
@@ -136,11 +125,9 @@ jobs:
 
                     ssl_certificate /etc/nginx/ssl/certificate.crt;
                     ssl_certificate_key /etc/nginx/ssl/certificate.key;
-                    
                     ssl_protocols TLSv1.2 TLSv1.3;
                     ssl_prefer_server_ciphers on;
 
-                    # Локация для API
                     location /api/ {
                         proxy_pass http://ouroboros-back-container:8000/;
                         proxy_http_version 1.1;
@@ -148,12 +135,10 @@ jobs:
                         proxy_set_header X-Real-IP $remote_addr;
                         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
                         proxy_set_header X-Forwarded-Proto $scheme;
-                        
-                        # Важные хедеры для Swagger и редиректов
+                        # Важно для Swagger
                         proxy_set_header X-Forwarded-Prefix /api;
                     }
 
-                    # Локация для Фронтенда
                     location / {
                         proxy_pass http://ouroboros-front-container:80/;
                         proxy_http_version 1.1;
@@ -167,14 +152,11 @@ jobs:
             EOL
 
             echo "Starting Nginx..."
-            docker run -d \
-              --name nginx-proxy \
-              --network nginx_network \
-              -p 80:80 \
-              -p 443:443 \
+            docker run -d --name nginx-proxy --network nginx_network \
+              -p 80:80 -p 443:443 \
               -v "$CONF_DIR/nginx.conf":/etc/nginx/nginx.conf:ro \
               -v "$SSL_DIR":/etc/nginx/ssl:ro \
               --restart unless-stopped \
               nginx:alpine
 
-            echo "Deployment complete!"
+            echo "Done!"
