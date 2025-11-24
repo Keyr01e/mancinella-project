@@ -1,3 +1,21 @@
+Да, я помню. В этом и была одна из причин ошибок: мы пытались копировать файлы, но из-за sudo и путаницы с путями (~ vs /root) скрипт падал.
+
+Ниже — финальный, исправленный вариант.
+
+Что именно изменено для надежности:
+
+Точный путь источника: Используется /etc/nginx/ssl/mancinella/.
+
+Решение проблемы с root: Я использую переменную $HOME и конструкцию, которая раскрывает пути до запуска sudo. Это гарантирует, что файлы скопируются в папку вашего пользователя (/home/ваш_юзер/nginx_ssl), а не в /root/nginx_ssl.
+
+Сброс прав: После копирования выполняется chown на текущего пользователя, чтобы Docker точно мог прочитать эти файлы.
+
+Полный файл cicd.yml
+code
+Yaml
+download
+content_copy
+expand_less
 name: CI/CD - Build & Deploy (Front + Back)
 
 on:
@@ -51,7 +69,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
-          # Передаем пароль как переменную окружения для безопасности
+          # Передаем пароль для sudo
           envs: SUDO_PASS
           script: |
             export SUDO_PASS="${{ secrets.SERVER_PASSWORD }}"
@@ -75,20 +93,29 @@ jobs:
             docker network create nginx_network 2>/dev/null || true
 
             echo "--- 4. Preparing SSL Certificates ---"
-            mkdir -p ~/nginx_conf ~/nginx_ssl
+            # Определяем пути явно через $HOME, чтобы не зависеть от контекста sudo
+            SSL_DIR="$HOME/nginx_ssl"
+            CONF_DIR="$HOME/nginx_conf"
 
-            # ИСПОЛЬЗУЕМ SUDO С ПАРОЛЕМ
-            # Мы запускаем bash от root, передавая ему сразу блок команд
-            echo "$SUDO_PASS" | sudo -S bash -c '
-              cp -L /etc/nginx/ssl/mancinella/certificate.crt ~/nginx_ssl/
-              cp -L /etc/nginx/ssl/mancinella/certificate.key ~/nginx_ssl/
-              # cp -L /etc/nginx/ssl/mancinella/certificate_ca.crt ~/nginx_ssl/ || true
-              
-              # Меняем владельца на обычного пользователя (того, под кем зашли по SSH)
-              chown -R '$USER':'$USER' ~/nginx_ssl
-              chmod 644 ~/nginx_ssl/certificate.crt
-              chmod 600 ~/nginx_ssl/certificate.key
-            '
+            # Очищаем старые папки, чтобы не было конфликтов прав доступа
+            echo "Cleaning up old configs..."
+            echo "$SUDO_PASS" | sudo -S rm -rf "$SSL_DIR" "$CONF_DIR"
+            
+            mkdir -p "$SSL_DIR" "$CONF_DIR"
+
+            echo "Copying certificates from source..."
+            # Копируем файлы. Путь назначения ($SSL_DIR) раскрывается ДО sudo, 
+            # поэтому копирование идет в домашнюю папку пользователя.
+            echo "$SUDO_PASS" | sudo -S cp -L /etc/nginx/ssl/mancinella/certificate.crt "$SSL_DIR/"
+            echo "$SUDO_PASS" | sudo -S cp -L /etc/nginx/ssl/mancinella/certificate.key "$SSL_DIR/"
+            
+            # ВАЖНО: Меняем владельца файлов с root на текущего пользователя ($USER),
+            # иначе Docker не сможет их прочитать при монтировании volume.
+            echo "$SUDO_PASS" | sudo -S chown -R $USER:$USER "$SSL_DIR"
+            
+            # Ставим права на чтение
+            chmod 644 "$SSL_DIR/certificate.crt"
+            chmod 600 "$SSL_DIR/certificate.key"
 
             echo "--- 5. Starting Containers ---"
             
@@ -112,7 +139,8 @@ jobs:
               "${{ secrets.DOCKER_IMAGE_FRONT }}:latest"
 
             echo "--- 6. Generating Nginx Config ---"
-            cat > ~/nginx_conf/nginx.conf << 'EOL'
+            # Генерируем конфиг в папке пользователя
+            cat > "$CONF_DIR/nginx.conf" << 'EOL'
             user  nginx;
             worker_processes auto;
             error_log /var/log/nginx/error.log notice;
@@ -143,6 +171,8 @@ jobs:
                     listen 443 ssl http2;
                     server_name mancinella.ru www.mancinella.ru;
 
+                    # ВНУТРИ контейнера файлы будут лежать в корне /etc/nginx/ssl/
+                    # так как мы монтируем папку целиком
                     ssl_certificate /etc/nginx/ssl/certificate.crt;
                     ssl_certificate_key /etc/nginx/ssl/certificate.key;
 
@@ -176,8 +206,10 @@ jobs:
               --network nginx_network \
               -p 80:80 \
               -p 443:443 \
-              -v ~/nginx_conf/nginx.conf:/etc/nginx/nginx.conf:ro \
-              -v ~/nginx_ssl:/etc/nginx/ssl:ro \
+              # Монтируем конфиг
+              -v "$CONF_DIR/nginx.conf":/etc/nginx/nginx.conf:ro \
+              # Монтируем папку с сертификатами (Хост -> Контейнер)
+              -v "$SSL_DIR":/etc/nginx/ssl:ro \
               --restart unless-stopped \
               nginx:alpine
 
