@@ -60,37 +60,36 @@ jobs:
             docker pull "${{ secrets.DOCKER_IMAGE_FRONT }}:latest"
             docker pull "${{ secrets.DOCKER_IMAGE_BACK }}:latest"
 
-            echo "--- 2. Removing old containers ---"
-            for c in nginx-proxy ouroboros-front-container ouroboros-back-container; do
-               docker rm -f $c || true
-            done
+            echo "--- 2. Killing old processes ---"
+            # Принудительно убиваем все, что может занимать порты
+            docker rm -f nginx-proxy ouroboros-front-container ouroboros-back-container 2>/dev/null || true
+            
+            # На всякий случай убиваем системный nginx, если он вдруг ожил
+            echo "$SUDO_PASS" | sudo -S pkill nginx || true
 
             echo "--- 3. Network ---"
             docker network create nginx_network 2>/dev/null || true
 
-            echo "--- 4. SSL Certificates Setup ---"
+            echo "--- 4. Generating TEMPORARY SSL ---"
+            # Мы генерируем свежий сертификат прямо здесь.
+            # Это решит проблему Mismatch и Unrecognized Name.
             SSL_DIR="$HOME/nginx_ssl"
             CONF_DIR="$HOME/nginx_conf"
             
             echo "$SUDO_PASS" | sudo -S rm -rf "$SSL_DIR" "$CONF_DIR"
             mkdir -p "$SSL_DIR" "$CONF_DIR"
 
-            echo "Copying certs..."
-            # 1. Копируем РОДНОЙ сертификат и ключ (они одной даты, они пара)
-            echo "$SUDO_PASS" | sudo -S cp -L /etc/nginx/ssl/mancinella/certificate.crt "$SSL_DIR/site.crt"
-            echo "$SUDO_PASS" | sudo -S cp -L /etc/nginx/ssl/mancinella/certificate.key "$SSL_DIR/site.key"
-            # 2. Копируем промежуточный сертификат (CA)
-            echo "$SUDO_PASS" | sudo -S cp -L /etc/nginx/ssl/mancinella/certificate_ca.crt "$SSL_DIR/ca.crt"
-            
+            echo "Generating self-signed cert..."
+            # Генерируем ключ и сертификат одной командой (они точно подойдут друг другу)
+            openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+              -keyout "$SSL_DIR/certificate.key" \
+              -out "$SSL_DIR/certificate.crt" \
+              -subj "/C=RU/ST=Moscow/L=Moscow/O=Mancinella/OU=IT/CN=mancinella.ru"
+
+            # Настраиваем права доступа
             echo "$SUDO_PASS" | sudo -S chown -R $USER:$USER "$SSL_DIR"
-
-            # 3. Создаем правильный Fullchain вручную (Сайт + CA)
-            # Это решает проблему mismatch, так как site.crt точно от этого ключа
-            cat "$SSL_DIR/site.crt" "$SSL_DIR/ca.crt" > "$SSL_DIR/fullchain_bundled.crt"
-
-            # 4. Права доступа (важно для Arch Linux Docker)
-            chmod 644 "$SSL_DIR/fullchain_bundled.crt"
-            chmod 644 "$SSL_DIR/site.key"
+            chmod 644 "$SSL_DIR/certificate.crt"
+            chmod 644 "$SSL_DIR/certificate.key"
 
             echo "--- 5. Starting App Containers ---"
             docker run -d --name ouroboros-back-container --network nginx_network \
@@ -128,20 +127,17 @@ jobs:
                 server {
                     listen 80;
                     server_name mancinella.ru www.mancinella.ru;
-                    # Временная заглушка, пока не починим SSL, но лучше оставить редирект
-                    location / {
-                        return 301 https://$host$request_uri;
-                    }
+                    # Редирект на HTTPS
+                    return 301 https://$host$request_uri;
                 }
 
                 server {
-                    # default_server спасает от ошибки "Unrecognized Name"
                     listen 443 ssl default_server;
                     server_name mancinella.ru www.mancinella.ru;
 
-                    # Используем наш склеенный надежный сертификат
-                    ssl_certificate /etc/nginx/ssl/fullchain_bundled.crt;
-                    ssl_certificate_key /etc/nginx/ssl/site.key;
+                    # Подключаем наши свежесгенерированные сертификаты
+                    ssl_certificate /etc/nginx/ssl/certificate.crt;
+                    ssl_certificate_key /etc/nginx/ssl/certificate.key;
                     
                     ssl_protocols TLSv1.2 TLSv1.3;
                     ssl_prefer_server_ciphers on;
