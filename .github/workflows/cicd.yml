@@ -2,13 +2,12 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
   REGISTRY: ghcr.io
-  # Using a custom environment variable with lowercase conversion
   IMAGE_NAME: "keyr01e/mancinella-project"
 
 jobs:
@@ -17,115 +16,120 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     
     steps:
-    - name: Клонирование репозитория
-      uses: actions/checkout@v4
+      - name: Клонирование репозитория
+        uses: actions/checkout@v4
 
-    - name: Настройка Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      - name: Настройка Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: Вход в GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Вход в GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Сборка и загрузка бэкенда
-      uses: docker/build-push-action@v5
-      with:
-        context: ./back
-        push: true
-        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      - name: Сборка и загрузка бэкенда
+        uses: docker/build-push-action@v5
+        with:
+          context: ./back
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-    - name: Сборка и загрузка фронтенда
-      uses: docker/build-push-action@v5
-      with:
-        context: ./front
-        push: true
-        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      - name: Сборка и загрузка фронтенда
+        uses: docker/build-push-action@v5
+        with:
+          context: ./front
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-    - name: Деплой через SSH
-      uses: appleboy/ssh-action@v1.2.0
-      with:
-        host: ${{ secrets.SERVER_HOST }}
-        username: ${{ secrets.SERVER_USER }}
-        password: ${{ secrets.SERVER_PASSWORD }}
-        port: ${{ secrets.SERVER_PORT }}
-        script: |
-          set -e
-          
-          # Вход в GitHub Container Registry
-          echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          
-          echo "Загрузка новых образов..."
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:latest
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:latest
+      - name: Деплой через SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            set -e
+            
+            # Вход в GitHub Container Registry
+            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            
+            echo "Остановка и удаление старых контейнеров..."
+            docker stop ouroboros-front-container 2>/dev/null || true
+            docker rm ouroboros-front-container 2>/dev/null || true
+            docker stop ouroboros-back-container 2>/dev/null || true
+            docker rm ouroboros-back-container 2>/dev/null || true
 
-          echo "Остановка старых контейнеров..."
-          docker stop ouroboros-front-container || true
-          docker rm ouroboros-front-container || true
-          docker stop ouroboros-back-container || true
-          docker rm ouroboros-back-container || true
+            echo "Удаление старых образов..."
+            docker rmi ghcr.io/keyr01e/mancinella-project/frontend:latest 2>/dev/null || true
+            docker rmi ghcr.io/keyr01e/mancinella-project/backend:latest 2>/dev/null || true
 
-          echo "Создание сети Caddy, если её нет..."
-          docker network create caddy 2>/dev/null || true
+            echo "Загрузка новых образов..."
+            docker pull ghcr.io/keyr01e/mancinella-project/frontend:latest
+            docker pull ghcr.io/keyr01e/mancinella-project/backend:latest
 
-          echo "Запуск БЭКЕНДА..."
-          docker run -d \
-            --name ouroboros-back-container \
-            --network caddy \
-            -e DATABASE_URL=${{ secrets.DATABASE_URL }} \
-            -e SECRET_KEY=${{ secrets.SECRET_KEY }} \
-            -e ALGORITHM=HS256 \
-            -e ACCESS_TOKEN_EXPIRE_MINUTES=43200 \
-            --restart unless-stopped \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/backend:latest
-          
-          echo "Запуск ФРОНТЕНДА..."
-          docker run -d \
-            --name ouroboros-front-container \
-            --network caddy \
-            -e API_URL=https://www.mancinella.ru/api \
-            --restart unless-stopped \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/frontend:latest
+            echo "Создание сети Caddy, если её нет..."
+            docker network create caddy 2>/dev/null || true
 
-          echo "Обновление конфигурации Caddy..."
-          cat > Caddyfile << 'EOL'
-          {
-              admin "unix//run/caddy/admin.socket"
-          }
+            echo "Запуск БЭКЕНДА..."
+            docker run -d \
+              --name ouroboros-back-container \
+              --network caddy \
+              -e DATABASE_URL=${{ secrets.DATABASE_URL }} \
+              -e SECRET_KEY=${{ secrets.SECRET_KEY }} \
+              -e ALGORITHM=HS256 \
+              -e ACCESS_TOKEN_EXPIRE_MINUTES=43200 \
+              --restart unless-stopped \
+              ghcr.io/keyr01e/mancinella-project/backend:latest
+            
+            echo "Запуск ФРОНТЕНДА..."
+            docker run -d \
+              --name ouroboros-front-container \
+              --network caddy \
+              -e API_URL=https://www.mancinella.ru/api \
+              --restart unless-stopped \
+              ghcr.io/keyr01e/mancinella-project/frontend:latest
 
-          # Редирект на www
-          mancinella.ru {
-              redir https://www.mancinella.ru{uri} 308
-          }
+            echo "Обновление конфигурации Caddy..."
+            cat > Caddyfile << 'EOL'
+            {
+                admin "unix//run/caddy/admin.socket"
+            }
 
-          # Основной домен
-          www.mancinella.ru {
-              # Прокси для API
-              handle_path /api/* {
-                  reverse_proxy ouroboros-back-container:8000
-              }
-              
-              # Фронтенд
-              handle {
-                  reverse_proxy ouroboros-front-container:80
-              }
-              
-              # SSL сертификат
-              tls /etc/caddy/ssl/mancinella.ru/fullchain.pem /etc/caddy/ssl/mancinella.ru/privkey.pem
-          }
-          EOL
+            # Редирект на www
+            mancinella.ru {
+                redir https://www.mancinella.ru{uri} 308
+            }
 
-          echo "Копирование Caddyfile и перезапуск Caddy..."
-          sudo cp Caddyfile /etc/caddy/Caddyfile
-          sudo chown caddy:caddy /etc/caddy/Caddyfile
-          sudo systemctl restart caddy
+            # Основной домен
+            www.mancinella.ru {
+                # Прокси для API
+                handle_path /api/* {
+                    reverse_proxy ouroboros-back-container:8000
+                }
+                
+                # Фронтенд
+                handle {
+                    reverse_proxy ouroboros-front-container:80
+                }
+                
+                # SSL сертификат
+                tls /etc/caddy/ssl/mancinella.ru/fullchain.pem /etc/caddy/ssl/mancinella.ru/privkey.pem
+            }
+            EOL
 
-          echo "Деплой успешно завершен!"
-          echo "Фронтенд: https://www.mancinella.ru"
-          echo "API: https://www.mancinella.ru/api"
+            echo "Копирование Caddyfile и перезапуск Caddy..."
+            sudo mkdir -p /etc/caddy
+            sudo cp Caddyfile /etc/caddy/Caddyfile
+            sudo chown -R caddy:caddy /etc/caddy
+            sudo systemctl restart caddy
+
+            echo "Деплой успешно завершен!"
+            echo "Фронтенд: https://www.mancinella.ru"
+            echo "API: https://www.mancinella.ru/api"
