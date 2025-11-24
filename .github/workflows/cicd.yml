@@ -1,100 +1,54 @@
-name: CI/CD - Build & Deploy (Front + Back)
+      deploy:
+        needs: build-and-push
+        runs-on: ubuntu-latest
 
-on:
-  push:
-    branches: [ "main" ]
+        steps:
+          - name: Deploy via SSH
+            uses: appleboy/ssh-action@v1.2.0
+            with:
+              host: ${{ secrets.SERVER_HOST }}
+              username: ${{ secrets.SERVER_USER }}
+              password: ${{ secrets.SERVER_PASSWORD }}
+              port: ${{ secrets.SERVER_PORT }}
+              script: |
+                set -e
+                echo "Pulling new Docker images..."
+                docker pull ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
+                docker pull ${{ secrets.DOCKER_IMAGE_BACK }}:latest
 
-jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
+                echo "Stopping old containers..."
+                docker stop ouroboros-front-container || true
+                docker rm ouroboros-front-container || true
+                docker stop ouroboros-back-container || true
+                docker rm ouroboros-back-container || true
+                docker stop nginx-proxy || true
+                docker rm nginx-proxy || true
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+                echo "Creating Docker network if not exists..."
+                docker network create nginx_network 2>/dev/null || true
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+                # Запуск контейнеров...
+                docker run -d --name ouroboros-back-container --network nginx_network \
+                  -e DATABASE_URL=${{ secrets.DATABASE_URL }} \
+                  -e SECRET_KEY=${{ secrets.SECRET_KEY }} \
+                  -e ALGORITHM=HS256 \
+                  -e ACCESS_TOKEN_EXPIRE_MINUTES=43200 \
+                  --restart unless-stopped \
+                  ${{ secrets.DOCKER_IMAGE_BACK }}:latest
 
-      - name: Login to Docker Registry
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USER }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+                docker run -d --name ouroboros-front-container --network nginx_network \
+                  -e API_URL=/api \
+                  --restart unless-stopped \
+                  ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
 
-      # ---------- FRONT ----------
-      - name: Build & Push FRONT image
-        uses: docker/build-push-action@v4
-        with:
-          context: ./front
-          file: ./front/Dockerfile
-          push: true
-          tags: ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
+                echo "Creating Nginx config..."
+                mkdir -p ~/nginx_conf
+                mkdir -p ~/nginx_ssl
+                cp /etc/nginx/ssl/mancinella.ru/certificate.* ~/nginx_ssl/ 2>/dev/null || true
+                chmod 600 ~/nginx_ssl/* 2>/dev/null || true
 
-      # ---------- BACK ----------
-      - name: Build & Push BACK image
-        uses: docker/build-push-action@v4
-        with:
-          context: ./back
-          file: ./back/Dockerfile
-          push: true
-          tags: ${{ secrets.DOCKER_IMAGE_BACK }}:latest
-
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          password: ${{ secrets.SERVER_PASSWORD }}
-          port: ${{ secrets.SERVER_PORT }}
-          script: |
-            set -e
-            echo "Pulling new Docker images..."
-            docker pull ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
-            docker pull ${{ secrets.DOCKER_IMAGE_BACK }}:latest
-
-            echo "Stopping old containers..."
-            docker stop ouroboros-front-container || true
-            docker rm ouroboros-front-container || true
-            docker stop ouroboros-back-container || true
-            docker rm ouroboros-back-container || true
-            docker stop nginx-proxy || true
-            docker rm nginx-proxy || true
-
-            echo "Creating Docker network if not exists..."
-            docker network create nginx_network 2>/dev/null || true
-
-            echo "Starting BACKEND container..."
-            docker run -d \
-              --name ouroboros-back-container \
-              --network nginx_network \
-              -e DATABASE_URL=${{ secrets.DATABASE_URL }} \
-              -e SECRET_KEY=${{ secrets.SECRET_KEY }} \
-              -e ALGORITHM=HS256 \
-              -e ACCESS_TOKEN_EXPIRE_MINUTES=43200 \
-              --restart unless-stopped \
-              ${{ secrets.DOCKER_IMAGE_BACK }}:latest
-
-            echo "Starting FRONTEND container..."
-            docker run -d \
-              --name ouroboros-front-container \
-              --network nginx_network \
-              -e API_URL=/api \
-              --restart unless-stopped \
-              ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
-
-            echo "Creating Nginx config and SSL directories..."
-            mkdir -p ~/nginx_conf
-            mkdir -p ~/nginx_ssl
-
-            cp /etc/nginx/ssl/mancinella.ru/certificate.* ~/nginx_ssl/ 2>/dev/null || true
-            chmod 600 ~/nginx_ssl/* 2>/dev/null || true
-
-            cat > ~/nginx_conf/nginx.conf << 'EOL'
+                # Ниже block cat — EOL должен начинаться без пробелов!
+                cat > ~/nginx_conf/nginx.conf << 'EOL'
 user  nginx;
 worker_processes  auto;
 
@@ -169,17 +123,3 @@ http {
     }
 }
 EOL
-
-            echo "Starting Nginx container with mounted config and SSL..."
-            docker run -d \
-              --name nginx-proxy \
-              --network nginx_network \
-              -p 80:80 \
-              -p 443:443 \
-              -v ~/nginx_conf/nginx.conf:/etc/nginx/nginx.conf:ro \
-              -v ~/nginx_ssl:/etc/nginx/ssl:ro \
-              --restart unless-stopped \
-              nginx:alpine
-
-            echo "Deployment complete!"
-            docker ps
