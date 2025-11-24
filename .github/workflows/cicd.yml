@@ -61,12 +61,10 @@ jobs:
             docker pull "${{ secrets.DOCKER_IMAGE_BACK }}:latest"
 
             echo "--- 2. Stopping old containers ---"
+            # Удаляем старые контейнеры
             for c in nginx-proxy ouroboros-front-container ouroboros-back-container; do
-              if [ "$(docker ps -q -f name=$c)" ]; then
-                  docker stop $c
-              fi
               if [ "$(docker ps -aq -f name=$c)" ]; then
-                  docker rm $c
+                  docker rm -f $c || true
               fi
             done
 
@@ -77,20 +75,16 @@ jobs:
             SSL_DIR="$HOME/nginx_ssl"
             CONF_DIR="$HOME/nginx_conf"
 
-            echo "Cleaning up old configs..."
+            # Очищаем и создаем заново
             echo "$SUDO_PASS" | sudo -S rm -rf "$SSL_DIR" "$CONF_DIR"
             mkdir -p "$SSL_DIR" "$CONF_DIR"
 
             echo "Copying certificates..."
-            # ВАЖНО: Копируем fullchain.crt, но сохраняем имя certificate.crt для конфига Nginx
-            # Это решает проблему SSL_UNRECOGNIZED_NAME_ALERT
+            # Используем fullchain
             echo "$SUDO_PASS" | sudo -S cp -L /etc/nginx/ssl/mancinella/fullchain.crt "$SSL_DIR/certificate.crt"
             echo "$SUDO_PASS" | sudo -S cp -L /etc/nginx/ssl/mancinella/certificate.key "$SSL_DIR/certificate.key"
             
-            # Меняем владельца на текущего пользователя
             echo "$SUDO_PASS" | sudo -S chown -R $USER:$USER "$SSL_DIR"
-            
-            # Права 644 обязательны, чтобы Nginx внутри Docker мог прочитать файлы
             chmod 644 "$SSL_DIR/certificate.crt"
             chmod 644 "$SSL_DIR/certificate.key"
 
@@ -129,10 +123,13 @@ jobs:
             http {
                 include /etc/nginx/mime.types;
                 default_type application/octet-stream;
+                
+                # Логирование для отладки
                 log_format main '$remote_addr - $remote_user [$time_local] "$request" '
                                 '$status $body_bytes_sent "$http_referer" '
-                                '"$http_user_agent" "$http_x_forwarded_for"';
+                                '"$http_user_agent"';
                 access_log /var/log/nginx/access.log main;
+                
                 sendfile on;
                 keepalive_timeout 65;
                 client_max_body_size 20M;
@@ -140,13 +137,18 @@ jobs:
                 server {
                     listen 80;
                     server_name mancinella.ru www.mancinella.ru;
+                    # Убираем редирект для проверки (временная мера, если SSL не работает)
+                    # Но лучше оставить редирект
                     return 301 https://$host$request_uri;
                 }
 
                 server {
-                    # Исправленный синтаксис для новых версий Nginx
-                    listen 443 ssl;
+                    # !!! КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ЗДЕСЬ !!!
+                    # Добавлен default_server, чтобы Nginx отдавал этот сертификат всегда,
+                    # даже если SNI не совпадает или идет обращение по IP.
+                    listen 443 ssl default_server;
                     http2 on;
+                    
                     server_name mancinella.ru www.mancinella.ru;
 
                     ssl_certificate /etc/nginx/ssl/certificate.crt;
@@ -189,5 +191,5 @@ jobs:
 
             echo "--- 7. Cleanup ---"
             docker image prune -f
-
+            
             echo "Deployment complete!"
