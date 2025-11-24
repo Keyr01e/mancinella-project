@@ -51,7 +51,10 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT }}
+          # Передаем пароль как переменную окружения для безопасности
+          envs: SUDO_PASS
           script: |
+            export SUDO_PASS="${{ secrets.SERVER_PASSWORD }}"
             set -e
 
             echo "--- 1. Pulling new Docker images ---"
@@ -72,22 +75,20 @@ jobs:
             docker network create nginx_network 2>/dev/null || true
 
             echo "--- 4. Preparing SSL Certificates ---"
-            # Создаем локальные папки под текущим пользователем
             mkdir -p ~/nginx_conf ~/nginx_ssl
 
-            # Копируем сертификаты с системного пути (нужен sudo)
-            # Используем -L чтобы следовать по симлинкам (важно для Let's Encrypt)
-            echo "Copying certs from /etc/nginx/ssl/mancinella/..."
-            sudo cp -L /etc/nginx/ssl/mancinella/certificate.crt ~/nginx_ssl/
-            sudo cp -L /etc/nginx/ssl/mancinella/certificate.key ~/nginx_ssl/
-            
-            # Если у вас есть файл цепочки CA, раскомментируйте строку ниже:
-            # sudo cp -L /etc/nginx/ssl/mancinella/certificate_ca.crt ~/nginx_ssl/ || true
-
-            # Выставляем права, чтобы Docker (и Nginx внутри) могли читать файлы
-            sudo chown -R $USER:$USER ~/nginx_ssl
-            sudo chmod 644 ~/nginx_ssl/certificate.crt
-            sudo chmod 600 ~/nginx_ssl/certificate.key
+            # ИСПОЛЬЗУЕМ SUDO С ПАРОЛЕМ
+            # Мы запускаем bash от root, передавая ему сразу блок команд
+            echo "$SUDO_PASS" | sudo -S bash -c '
+              cp -L /etc/nginx/ssl/mancinella/certificate.crt ~/nginx_ssl/
+              cp -L /etc/nginx/ssl/mancinella/certificate.key ~/nginx_ssl/
+              # cp -L /etc/nginx/ssl/mancinella/certificate_ca.crt ~/nginx_ssl/ || true
+              
+              # Меняем владельца на обычного пользователя (того, под кем зашли по SSH)
+              chown -R '$USER':'$USER' ~/nginx_ssl
+              chmod 644 ~/nginx_ssl/certificate.crt
+              chmod 600 ~/nginx_ssl/certificate.key
+            '
 
             echo "--- 5. Starting Containers ---"
             
@@ -111,7 +112,6 @@ jobs:
               "${{ secrets.DOCKER_IMAGE_FRONT }}:latest"
 
             echo "--- 6. Generating Nginx Config ---"
-            # Важно: используем 'EOL' в кавычках, чтобы bash не пытался подставить переменные $host и т.д.
             cat > ~/nginx_conf/nginx.conf << 'EOL'
             user  nginx;
             worker_processes auto;
@@ -131,7 +131,7 @@ jobs:
                 access_log /var/log/nginx/access.log main;
                 sendfile on;
                 keepalive_timeout 65;
-                client_max_body_size 20M; 
+                client_max_body_size 20M;
 
                 server {
                     listen 80;
@@ -143,16 +143,13 @@ jobs:
                     listen 443 ssl http2;
                     server_name mancinella.ru www.mancinella.ru;
 
-                    # ПУТИ ВНУТРИ КОНТЕЙНЕРА (монтируются в корень /etc/nginx/ssl)
                     ssl_certificate /etc/nginx/ssl/certificate.crt;
                     ssl_certificate_key /etc/nginx/ssl/certificate.key;
-                    # ssl_trusted_certificate /etc/nginx/ssl/certificate_ca.crt;
 
                     ssl_protocols TLSv1.2 TLSv1.3;
                     ssl_prefer_server_ciphers on;
 
                     location /api/ {
-                        # Обратите внимание: слэш в конце 8000/ обрезает /api/ из запроса
                         proxy_pass http://ouroboros-back-container:8000/;
                         proxy_http_version 1.1;
                         proxy_set_header Host $host;
@@ -188,4 +185,3 @@ jobs:
             docker image prune -f
 
             echo "Deployment complete!"
-            docker ps
