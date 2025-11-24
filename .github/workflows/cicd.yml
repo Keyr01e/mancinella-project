@@ -1,4 +1,4 @@
-name: CI/CD - Build & Deploy (Front + Back)
+name: CI/CD - Build & Deploy (HTTP ONLY)
 
 on:
   push:
@@ -60,38 +60,15 @@ jobs:
             docker pull "${{ secrets.DOCKER_IMAGE_FRONT }}:latest"
             docker pull "${{ secrets.DOCKER_IMAGE_BACK }}:latest"
 
-            echo "--- 2. Killing old processes ---"
-            # Принудительно убиваем все, что может занимать порты
+            echo "--- 2. Cleaning up ---"
             docker rm -f nginx-proxy ouroboros-front-container ouroboros-back-container 2>/dev/null || true
-            
-            # На всякий случай убиваем системный nginx, если он вдруг ожил
-            echo "$SUDO_PASS" | sudo -S pkill nginx || true
+            echo "$SUDO_PASS" | sudo -S rm -rf "$HOME/nginx_conf"
+            mkdir -p "$HOME/nginx_conf"
 
             echo "--- 3. Network ---"
             docker network create nginx_network 2>/dev/null || true
 
-            echo "--- 4. Generating TEMPORARY SSL ---"
-            # Мы генерируем свежий сертификат прямо здесь.
-            # Это решит проблему Mismatch и Unrecognized Name.
-            SSL_DIR="$HOME/nginx_ssl"
-            CONF_DIR="$HOME/nginx_conf"
-            
-            echo "$SUDO_PASS" | sudo -S rm -rf "$SSL_DIR" "$CONF_DIR"
-            mkdir -p "$SSL_DIR" "$CONF_DIR"
-
-            echo "Generating self-signed cert..."
-            # Генерируем ключ и сертификат одной командой (они точно подойдут друг другу)
-            openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-              -keyout "$SSL_DIR/certificate.key" \
-              -out "$SSL_DIR/certificate.crt" \
-              -subj "/C=RU/ST=Moscow/L=Moscow/O=Mancinella/OU=IT/CN=mancinella.ru"
-
-            # Настраиваем права доступа
-            echo "$SUDO_PASS" | sudo -S chown -R $USER:$USER "$SSL_DIR"
-            chmod 644 "$SSL_DIR/certificate.crt"
-            chmod 644 "$SSL_DIR/certificate.key"
-
-            echo "--- 5. Starting App Containers ---"
+            echo "--- 4. Starting App Containers ---"
             docker run -d --name ouroboros-back-container --network nginx_network \
               -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               -e SECRET_KEY="${{ secrets.SECRET_KEY }}" \
@@ -105,8 +82,8 @@ jobs:
               --restart unless-stopped \
               "${{ secrets.DOCKER_IMAGE_FRONT }}:latest"
 
-            echo "--- 6. Generating Nginx Config ---"
-            cat > "$CONF_DIR/nginx.conf" << 'EOL'
+            echo "--- 5. Generating HTTP-ONLY Nginx Config ---"
+            cat > "$HOME/nginx_conf/nginx.conf" << 'EOL'
             user  nginx;
             worker_processes auto;
             error_log /var/log/nginx/error.log notice;
@@ -127,20 +104,8 @@ jobs:
                 server {
                     listen 80;
                     server_name mancinella.ru www.mancinella.ru;
-                    # Редирект на HTTPS
-                    return 301 https://$host$request_uri;
-                }
-
-                server {
-                    listen 443 ssl default_server;
-                    server_name mancinella.ru www.mancinella.ru;
-
-                    # Подключаем наши свежесгенерированные сертификаты
-                    ssl_certificate /etc/nginx/ssl/certificate.crt;
-                    ssl_certificate_key /etc/nginx/ssl/certificate.key;
                     
-                    ssl_protocols TLSv1.2 TLSv1.3;
-                    ssl_prefer_server_ciphers on;
+                    # БЕЗ SSL, БЕЗ РЕДИРЕКТОВ
 
                     location /api/ {
                         proxy_pass http://ouroboros-back-container:8000/;
@@ -163,17 +128,14 @@ jobs:
             }
             EOL
 
-            echo "Starting Nginx..."
+            echo "Starting Nginx (HTTP ONLY)..."
+            # Запускаем ТОЛЬКО 80 порт. SSL отключен.
             docker run -d \
               --name nginx-proxy \
               --network nginx_network \
               -p 80:80 \
-              -p 443:443 \
-              -v "$CONF_DIR/nginx.conf":/etc/nginx/nginx.conf:ro \
-              -v "$SSL_DIR":/etc/nginx/ssl:ro \
+              -v "$HOME/nginx_conf/nginx.conf":/etc/nginx/nginx.conf:ro \
               --restart unless-stopped \
               nginx:alpine
 
-            echo "--- 7. Cleanup ---"
-            docker image prune -f
             echo "Deployment complete!"
