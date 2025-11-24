@@ -56,7 +56,7 @@ jobs:
             echo "Pulling new Docker images..."
             docker pull ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
             docker pull ${{ secrets.DOCKER_IMAGE_BACK }}:latest
-            
+
             echo "Stopping old containers..."
             docker stop ouroboros-front-container || true
             docker rm ouroboros-front-container || true
@@ -64,11 +64,11 @@ jobs:
             docker rm ouroboros-back-container || true
             docker stop nginx-proxy || true
             docker rm nginx-proxy || true
-            
+
             echo "Creating Docker network if not exists..."
             docker network create nginx_network 2>/dev/null || true
-            
-            echo "Starting BACKEND..."
+
+            echo "Starting BACKEND container..."
             docker run -d \
               --name ouroboros-back-container \
               --network nginx_network \
@@ -78,8 +78,8 @@ jobs:
               -e ACCESS_TOKEN_EXPIRE_MINUTES=43200 \
               --restart unless-stopped \
               ${{ secrets.DOCKER_IMAGE_BACK }}:latest
-            
-            echo "Starting FRONTEND..."
+
+            echo "Starting FRONTEND container..."
             docker run -d \
               --name ouroboros-front-container \
               --network nginx_network \
@@ -87,91 +87,94 @@ jobs:
               --restart unless-stopped \
               ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
 
-            echo "Creating Nginx configuration and SSL directory..."
+            echo "Creating Nginx config and SSL directories..."
             mkdir -p ~/nginx_conf
             mkdir -p ~/nginx_ssl
-            
-            # Copy certificates without sudo first
+
+            # Copy SSL files (certificate.crt, certificate.key, certificate_ca.crt)
             cp /etc/nginx/ssl/mancinella.ru/certificate.* ~/nginx_ssl/ 2>/dev/null || true
             chmod 600 ~/nginx_ssl/* 2>/dev/null || true
 
+            # Create nginx.conf
             cat > ~/nginx_conf/nginx.conf << 'EOL'
-            user  nginx;
-            worker_processes  auto;
+user  nginx;
+worker_processes  auto;
 
-            error_log  /var/log/nginx/error.log notice;
-            pid        /var/run/nginx.pid;
+error_log  /var/log/nginx/error.log notice;
+pid        /var/run/nginx.pid;
 
-            events {
-                worker_connections  1024;
-            }
+events {
+    worker_connections  1024;
+}
 
-            http {
-                include       /etc/nginx/mime.types;
-                default_type  application/octet-stream;
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
 
-                log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
-                                  '$status $body_bytes_sent "$http_referer" '
-                                  '"$http_user_agent" "$http_x_forwarded_for"';
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
 
-                access_log  /var/log/nginx/access.log  main;
+    access_log  /var/log/nginx/access.log  main;
 
-                sendfile        on;
-                keepalive_timeout  65;
+    sendfile        on;
+    keepalive_timeout  65;
 
-                server {
-                    listen       80;
-                    server_name  mancinella.ru www.mancinella.ru;
-                    return 301 https://$host$request_uri;
-                }
+    # Redirect HTTP to HTTPS
+    server {
+        listen 80;
+        server_name mancinella.ru www.mancinella.ru;
+        return 301 https://$host$request_uri;
+    }
 
-                server {
-                    listen 443 ssl;
-                    http2 on;
-                    server_name mancinella.ru www.mancinella.ru;
+    # HTTPS server
+    server {
+        listen 443 ssl http2;
+        server_name mancinella.ru www.mancinella.ru;
 
-                    ssl_certificate /etc/nginx/ssl/certificate.crt;
-                    ssl_certificate_key /etc/nginx/ssl/certificate.key;
-                    
-                    ssl_protocols TLSv1.2 TLSv1.3;
-                    ssl_prefer_server_ciphers on;
-                    ssl_ciphers "EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH";
-                    ssl_ecdh_curve secp384r1;
-                    ssl_session_cache shared:SSL:10m;
-                    ssl_session_tickets off;
-                    ssl_stapling on;
-                    ssl_stapling_verify on;
+        ssl_certificate /etc/nginx/ssl/certificate.crt;
+        ssl_certificate_key /etc/nginx/ssl/certificate.key;
+        ssl_trusted_certificate /etc/nginx/ssl/certificate_ca.crt;
 
-                    location /api/ {
-                        proxy_pass http://ouroboros-back-container:8000/;
-                        proxy_http_version 1.1;
-                        proxy_set_header Host $host;
-                        proxy_set_header X-Real-IP $remote_addr;
-                        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                        proxy_set_header X-Forwarded-Proto $scheme;
-                        proxy_set_header Upgrade $http_upgrade;
-                        proxy_set_header Connection "upgrade";
-                    }
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_prefer_server_ciphers on;
+        ssl_ciphers "EECDH+AESGCM:EDH+AESGCM:AES256+EECDH:AES256+EDH";
+        ssl_ecdh_curve secp384r1;
+        ssl_session_cache shared:SSL:10m;
+        ssl_session_tickets off;
+        ssl_stapling on;
+        ssl_stapling_verify on;
 
-                    location / {
-                        proxy_pass http://ouroboros-front-container:80/;
-                        proxy_http_version 1.1;
-                        proxy_set_header Host $host;
-                        proxy_set_header X-Real-IP $remote_addr;
-                        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                        proxy_set_header X-Forwarded-Proto $scheme;
-                    }
+        location /api/ {
+            proxy_pass http://ouroboros-back-container:8000/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+        }
 
-                    location ~ /\. {
-                        deny all;
-                        access_log off;
-                        log_not_found off;
-                    }
-                }
-            }
-            EOL
+        location / {
+            proxy_pass http://ouroboros-front-container:80/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
 
-            echo "Starting Nginx in Docker with volume mounts..."
+        location ~ /\. {
+            deny all;
+            access_log off;
+            log_not_found off;
+        }
+    }
+}
+EOL
+
+            echo "Starting Nginx container with mounted config and SSL..."
             docker run -d \
               --name nginx-proxy \
               --network nginx_network \
@@ -182,14 +185,5 @@ jobs:
               --restart unless-stopped \
               nginx:alpine
 
-            echo "Checking container status..."
-            docker ps
-            echo "Backend logs:"
-            docker logs ouroboros-back-container || true
-            echo "Frontend logs:"
-            docker logs ouroboros-front-container || true
-            echo "Nginx logs:"
-            docker logs nginx-proxy || true
             echo "Deployment complete!"
-            echo "Frontend: https://www.mancinella.ru"
-            echo "API: https://www.mancinella.ru/api"
+            docker ps
