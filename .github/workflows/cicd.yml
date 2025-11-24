@@ -41,154 +41,152 @@ jobs:
           cache-to: type=inline
 
   deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          password: ${{ secrets.SERVER_PASSWORD }}
-          port: ${{ secrets.SERVER_PORT }}
-          # Передаем пароль для sudo
-          envs: SUDO_PASS
-          script: |
-            export SUDO_PASS="${{ secrets.SERVER_PASSWORD }}"
-            set -e
-
-            echo "--- 1. Pulling new Docker images ---"
-            docker pull "${{ secrets.DOCKER_IMAGE_FRONT }}:latest"
-            docker pull "${{ secrets.DOCKER_IMAGE_BACK }}:latest"
-
-            echo "--- 2. Stopping old containers ---"
-            for c in nginx-proxy ouroboros-front-container ouroboros-back-container; do
-              if [ "$(docker ps -q -f name=$c)" ]; then
-                  docker stop $c
-              fi
-              if [ "$(docker ps -aq -f name=$c)" ]; then
-                  docker rm $c
-              fi
-            done
-
-            echo "--- 3. Network Setup ---"
-            docker network create nginx_network 2>/dev/null || true
-
-            echo "--- 4. Preparing SSL Certificates ---"
-            # Определяем пути явно через $HOME
-            SSL_DIR="$HOME/nginx_ssl"
-            CONF_DIR="$HOME/nginx_conf"
-
-            # Очищаем старые папки
-            echo "Cleaning up old configs..."
-            echo "$SUDO_PASS" | sudo -S rm -rf "$SSL_DIR" "$CONF_DIR"
-            
-            mkdir -p "$SSL_DIR" "$CONF_DIR"
-
-            echo "Copying certificates from source..."
-            echo "$SUDO_PASS" | sudo -S cp -L /etc/nginx/ssl/mancinella/certificate.crt "$SSL_DIR/"
-            echo "$SUDO_PASS" | sudo -S cp -L /etc/nginx/ssl/mancinella/certificate.key "$SSL_DIR/"
-            
-            # Меняем владельца файлов на текущего пользователя
-            echo "$SUDO_PASS" | sudo -S chown -R $USER:$USER "$SSL_DIR"
-            
-            # Ставим права на чтение
-            chmod 644 "$SSL_DIR/certificate.crt"
-            chmod 600 "$SSL_DIR/certificate.key"
-
-            echo "--- 5. Starting Containers ---"
-            
-            # BACKEND
-            docker run -d \
-              --name ouroboros-back-container \
-              --network nginx_network \
-              -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-              -e SECRET_KEY="${{ secrets.SECRET_KEY }}" \
-              -e ALGORITHM=HS256 \
-              -e ACCESS_TOKEN_EXPIRE_MINUTES=43200 \
-              --restart unless-stopped \
-              "${{ secrets.DOCKER_IMAGE_BACK }}:latest"
-
-            # FRONTEND
-            docker run -d \
-              --name ouroboros-front-container \
-              --network nginx_network \
-              -e API_URL=/api \
-              --restart unless-stopped \
-              "${{ secrets.DOCKER_IMAGE_FRONT }}:latest"
-
-            echo "--- 6. Generating Nginx Config ---"
-            cat > "$CONF_DIR/nginx.conf" << 'EOL'
-            user  nginx;
-            worker_processes auto;
-            error_log /var/log/nginx/error.log notice;
-            pid /var/run/nginx.pid;
-
-            events {
-                worker_connections 1024;
-            }
-
-            http {
-                include /etc/nginx/mime.types;
-                default_type application/octet-stream;
-                log_format main '$remote_addr - $remote_user [$time_local] "$request" '
-                                '$status $body_bytes_sent "$http_referer" '
-                                '"$http_user_agent" "$http_x_forwarded_for"';
-                access_log /var/log/nginx/access.log main;
-                sendfile on;
-                keepalive_timeout 65;
-                client_max_body_size 20M;
-
-                server {
-                    listen 80;
-                    server_name mancinella.ru www.mancinella.ru;
-                    return 301 https://$host$request_uri;
-                }
-
-                server {
-                    listen 443 ssl http2;
-                    server_name mancinella.ru www.mancinella.ru;
-
-                    ssl_certificate /etc/nginx/ssl/certificate.crt;
-                    ssl_certificate_key /etc/nginx/ssl/certificate.key;
-
-                    ssl_protocols TLSv1.2 TLSv1.3;
-                    ssl_prefer_server_ciphers on;
-
-                    location /api/ {
-                        proxy_pass http://ouroboros-back-container:8000/;
-                        proxy_http_version 1.1;
-                        proxy_set_header Host $host;
-                        proxy_set_header X-Real-IP $remote_addr;
-                        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                        proxy_set_header X-Forwarded-Proto $scheme;
-                    }
-
-                    location / {
-                        proxy_pass http://ouroboros-front-container:80/;
-                        proxy_http_version 1.1;
-                        proxy_set_header Host $host;
-                        proxy_set_header X-Real-IP $remote_addr;
-                        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                        proxy_set_header X-Forwarded-Proto $scheme;
-                    }
-                }
-            }
-            EOL
-
-            echo "Starting Nginx..."
-            # Монтируем конфиг и сертификаты (комментарии вынесены наружу)
-            docker run -d \
-              --name nginx-proxy \
-              --network nginx_network \
-              -p 80:80 \
-              -p 443:443 \
-              -v "$CONF_DIR/nginx.conf":/etc/nginx/nginx.conf:ro \
-              -v "$SSL_DIR":/etc/nginx/ssl:ro \
-              --restart unless-stopped \
-              nginx:alpine
-
-            echo "--- 7. Cleanup ---"
-            docker image prune -f
-
-            echo "Deployment complete!"
+      needs: build-and-push
+      runs-on: ubuntu-latest
+      steps:
+        - name: Deploy via SSH
+          uses: appleboy/ssh-action@v1
+          with:
+            host: ${{ secrets.SERVER_HOST }}
+            username: ${{ secrets.SERVER_USER }}
+            password: ${{ secrets.SERVER_PASSWORD }}
+            port: ${{ secrets.SERVER_PORT }}
+            envs: SUDO_PASS
+            script: |
+              export SUDO_PASS="${{ secrets.SERVER_PASSWORD }}"
+              set -e
+  
+              echo "--- 1. Pulling new Docker images ---"
+              docker pull "${{ secrets.DOCKER_IMAGE_FRONT }}:latest"
+              docker pull "${{ secrets.DOCKER_IMAGE_BACK }}:latest"
+  
+              echo "--- 2. Stopping old containers ---"
+              for c in nginx-proxy ouroboros-front-container ouroboros-back-container; do
+                if [ "$(docker ps -q -f name=$c)" ]; then
+                    docker stop $c
+                fi
+                if [ "$(docker ps -aq -f name=$c)" ]; then
+                    docker rm $c
+                fi
+              done
+  
+              echo "--- 3. Network Setup ---"
+              docker network create nginx_network 2>/dev/null || true
+  
+              echo "--- 4. Preparing SSL Certificates ---"
+              SSL_DIR="$HOME/nginx_ssl"
+              CONF_DIR="$HOME/nginx_conf"
+  
+              echo "Cleaning up old configs..."
+              echo "$SUDO_PASS" | sudo -S rm -rf "$SSL_DIR" "$CONF_DIR"
+              mkdir -p "$SSL_DIR" "$CONF_DIR"
+  
+              echo "Copying certificates..."
+              # ИСПОЛЬЗУЕМ FULLCHAIN ВМЕСТО ОБЫЧНОГО CERTIFICATE
+              echo "$SUDO_PASS" | sudo -S cp -L /etc/nginx/ssl/mancinella/fullchain.crt "$SSL_DIR/certificate.crt"
+              echo "$SUDO_PASS" | sudo -S cp -L /etc/nginx/ssl/mancinella/certificate.key "$SSL_DIR/certificate.key"
+              
+              # Меняем владельца на текущего пользователя
+              echo "$SUDO_PASS" | sudo -S chown -R $USER:$USER "$SSL_DIR"
+              
+              # Ставим права на чтение (644 для ключа - важно для Docker)
+              chmod 644 "$SSL_DIR/certificate.crt"
+              chmod 644 "$SSL_DIR/certificate.key"
+  
+              echo "--- 5. Starting Containers ---"
+              
+              # BACKEND
+              docker run -d \
+                --name ouroboros-back-container \
+                --network nginx_network \
+                -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+                -e SECRET_KEY="${{ secrets.SECRET_KEY }}" \
+                -e ALGORITHM=HS256 \
+                -e ACCESS_TOKEN_EXPIRE_MINUTES=43200 \
+                --restart unless-stopped \
+                "${{ secrets.DOCKER_IMAGE_BACK }}:latest"
+  
+              # FRONTEND
+              docker run -d \
+                --name ouroboros-front-container \
+                --network nginx_network \
+                -e API_URL=/api \
+                --restart unless-stopped \
+                "${{ secrets.DOCKER_IMAGE_FRONT }}:latest"
+  
+              echo "--- 6. Generating Nginx Config ---"
+              cat > "$CONF_DIR/nginx.conf" << 'EOL'
+              user  nginx;
+              worker_processes auto;
+              error_log /var/log/nginx/error.log notice;
+              pid /var/run/nginx.pid;
+  
+              events {
+                  worker_connections 1024;
+              }
+  
+              http {
+                  include /etc/nginx/mime.types;
+                  default_type application/octet-stream;
+                  log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                                  '$status $body_bytes_sent "$http_referer" '
+                                  '"$http_user_agent" "$http_x_forwarded_for"';
+                  access_log /var/log/nginx/access.log main;
+                  sendfile on;
+                  keepalive_timeout 65;
+                  client_max_body_size 20M;
+  
+                  server {
+                      listen 80;
+                      server_name mancinella.ru www.mancinella.ru;
+                      return 301 https://$host$request_uri;
+                  }
+  
+                  server {
+                      # Исправленный синтаксис HTTP2 для новых версий Nginx
+                      listen 443 ssl;
+                      http2 on;
+                      server_name mancinella.ru www.mancinella.ru;
+  
+                      ssl_certificate /etc/nginx/ssl/certificate.crt;
+                      ssl_certificate_key /etc/nginx/ssl/certificate.key;
+  
+                      ssl_protocols TLSv1.2 TLSv1.3;
+                      ssl_prefer_server_ciphers on;
+  
+                      location /api/ {
+                          proxy_pass http://ouroboros-back-container:8000/;
+                          proxy_http_version 1.1;
+                          proxy_set_header Host $host;
+                          proxy_set_header X-Real-IP $remote_addr;
+                          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                          proxy_set_header X-Forwarded-Proto $scheme;
+                      }
+  
+                      location / {
+                          proxy_pass http://ouroboros-front-container:80/;
+                          proxy_http_version 1.1;
+                          proxy_set_header Host $host;
+                          proxy_set_header X-Real-IP $remote_addr;
+                          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                          proxy_set_header X-Forwarded-Proto $scheme;
+                      }
+                  }
+              }
+              EOL
+  
+              echo "Starting Nginx..."
+              docker run -d \
+                --name nginx-proxy \
+                --network nginx_network \
+                -p 80:80 \
+                -p 443:443 \
+                -v "$CONF_DIR/nginx.conf":/etc/nginx/nginx.conf:ro \
+                -v "$SSL_DIR":/etc/nginx/ssl:ro \
+                --restart unless-stopped \
+                nginx:alpine
+  
+              echo "--- 7. Cleanup ---"
+              docker image prune -f
+  
+              echo "Deployment complete!"
