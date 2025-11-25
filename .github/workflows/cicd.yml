@@ -1,4 +1,4 @@
-name: CI/CD - Production Deploy (With Persistent DB)
+name: CI/CD - Production Deploy (Final Full)
 
 on:
   push:
@@ -29,6 +29,7 @@ jobs:
           tags: ${{ secrets.DOCKER_IMAGE_FRONT }}:latest
           cache-from: type=registry,ref=${{ secrets.DOCKER_IMAGE_FRONT }}:latest
           cache-to: type=inline
+          # Передаем настройки, чтобы фронт стучался по относительному пути /api
           build-args: |
             VITE_API_URL=/api
             REACT_APP_API_URL=/api
@@ -74,22 +75,25 @@ jobs:
             echo "--- 4. Preparing Filesystem ---"
             SSL_DIR="$HOME/nginx_ssl"
             CONF_DIR="$HOME/nginx_conf"
-            DATA_DIR="$HOME/app_data"
-            MEDIA_DIR="$HOME/app_media"  # <--- Папка для картинок
+            DATA_DIR="$HOME/app_data"   # Папка для Базы Данных
+            MEDIA_DIR="$HOME/app_media" # Папка для Картинок
             
-            # Создаем все папки
+            # Создаем папки для данных и медиа (если их нет)
             mkdir -p "$DATA_DIR" "$MEDIA_DIR"
             
-            # ДАЕМ ПРАВА 777 (Чтобы и Бэк мог писать, и Nginx читать)
+            # ВАЖНО: Даем права 777, чтобы и Docker (внутри), и Nginx могли читать/писать
             echo "$SUDO_PASS" | sudo -S chmod -R 777 "$DATA_DIR" "$MEDIA_DIR"
             
-            # Чистим конфиги, сертификаты обновляем
+            # Чистим конфиги Nginx (но данные не трогаем!)
             echo "$SUDO_PASS" | sudo -S rm -rf "$SSL_DIR" "$CONF_DIR"
             mkdir -p "$SSL_DIR" "$CONF_DIR"
 
-            echo "Copying certificates..."
+            echo "Copying SSL certificates..."
+            # Копируем проверенные файлы с сервера
             echo "$SUDO_PASS" | sudo -S cp -L /etc/nginx/ssl/mancinella/fullchain.crt "$SSL_DIR/certificate.crt"
             echo "$SUDO_PASS" | sudo -S cp -L /etc/nginx/ssl/mancinella/site.key "$SSL_DIR/certificate.key"
+            
+            # Исправляем владельца и права (чтобы Docker мог прочитать ключи)
             echo "$SUDO_PASS" | sudo -S chown -R $USER:$USER "$SSL_DIR"
             chmod 644 "$SSL_DIR/certificate.crt"
             chmod 644 "$SSL_DIR/certificate.key"
@@ -98,8 +102,8 @@ jobs:
             
             # BACKEND
             # Монтируем:
-            # Базу: $DATA_DIR -> /app/data
-            # Медиа: $MEDIA_DIR -> /app/media
+            # - Базу в /app/data
+            # - Медиа в /app/media (сюда сохраняются загрузки)
             docker run -d --name ouroboros-back-container --network nginx_network \
               -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               -e SECRET_KEY="${{ secrets.SECRET_KEY }}" \
@@ -128,11 +132,16 @@ jobs:
             http {
                 include /etc/nginx/mime.types;
                 default_type application/octet-stream;
-                access_log /var/log/nginx/access.log;
+                
+                log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                                '$status $body_bytes_sent "$http_referer" '
+                                '"$http_user_agent"';
+                access_log /var/log/nginx/access.log main;
+                
                 sendfile on;
                 keepalive_timeout 65;
-                client_max_body_size 20M; # Макс размер файла 20МБ
-                proxy_read_timeout 300s;
+                client_max_body_size 20M; # Максимальный размер загрузки
+                proxy_read_timeout 300s;  # Чтобы вебсокеты не рвались
                 proxy_connect_timeout 75s;
 
                 server {
@@ -150,21 +159,33 @@ jobs:
                     ssl_protocols TLSv1.2 TLSv1.3;
                     ssl_prefer_server_ciphers on;
 
-                    # --- РАЗДАЧА СТАТИКИ (МЕДИА) ---
-                    # Если запрос /media/avatars/1.jpg -> Nginx берет его из папки
+                    # --- FIX ДЛЯ ФРОНТЕНДА (МЕДИА) ---
+                    # Если фронт добавил /api к картинке, мы всё равно отдаем файл
+                    location /api/media/ {
+                        alias /var/www/media/;
+                        autoindex off;
+                        expires 30d;
+                        add_header Cache-Control "public, no-transform";
+                    }
+
+                    # Нормальный путь для медиа
                     location /media/ {
                         alias /var/www/media/;
                         autoindex off;
-                        expires 30d; # Кэшируем картинки в браузере на месяц
+                        expires 30d;
                         add_header Cache-Control "public, no-transform";
                     }
-                    # -------------------------------
 
+                    # API и WEBSOCKETS
                     location /api/ {
                         proxy_pass http://ouroboros-back-container:8000/;
+                        
+                        # Включаем WebSockets
                         proxy_http_version 1.1;
                         proxy_set_header Upgrade $http_upgrade;
                         proxy_set_header Connection "upgrade";
+                        
+                        # Заголовки
                         proxy_set_header Host $host;
                         proxy_set_header X-Real-IP $remote_addr;
                         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -172,6 +193,7 @@ jobs:
                         proxy_set_header X-Forwarded-Prefix /api;
                     }
 
+                    # Фронтенд
                     location / {
                         proxy_pass http://ouroboros-front-container:80/;
                         proxy_http_version 1.1;
@@ -185,7 +207,7 @@ jobs:
             EOL
 
             echo "Starting Nginx..."
-            # Монтируем Медиа папку в Nginx по пути /var/www/media
+            # Монтируем Медиа папку в Nginx для раздачи статики
             docker run -d --name nginx-proxy --network nginx_network \
               -p 80:80 -p 443:443 \
               -v "$CONF_DIR/nginx.conf":/etc/nginx/nginx.conf:ro \
