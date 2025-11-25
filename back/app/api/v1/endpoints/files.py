@@ -9,15 +9,15 @@ from pathlib import Path
 
 router = APIRouter()
 
-# Директория для хранения файлов
-UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
+# ВАЖНО: Используем абсолютный путь, который мы подключим через Docker Volume
+UPLOAD_DIR = Path("/app/media")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 AVATAR_DIR = UPLOAD_DIR / "avatars"
-AVATAR_DIR.mkdir(exist_ok=True)
+AVATAR_DIR.mkdir(parents=True, exist_ok=True)
 
 ATTACHMENTS_DIR = UPLOAD_DIR / "attachments"
-ATTACHMENTS_DIR.mkdir(exist_ok=True)
+ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @router.post("/upload")
@@ -30,18 +30,16 @@ async def upload_files(
     uploaded_files = []
     
     for file in files:
-        # Генерируем уникальное имя файла
         file_extension = os.path.splitext(file.filename)[1]
         unique_filename = f"{uuid.uuid4()}{file_extension}"
         file_path = ATTACHMENTS_DIR / unique_filename
         
-        # Сохраняем файл
         with open(file_path, "wb") as f:
             content = await file.read()
             f.write(content)
         
-        # Формируем URL для доступа к файлу
-        file_url = f"/api/v1/files/attachments/{unique_filename}"
+        # ИЗМЕНЕНИЕ: Формируем URL для Nginx (/media/...)
+        file_url = f"/media/attachments/{unique_filename}"
         
         uploaded_files.append({
             "name": file.filename,
@@ -60,50 +58,35 @@ async def upload_avatar(
     db: Session = Depends(get_db)
 ):
     """Загрузка аватара пользователя"""
-    # Проверяем тип файла
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Only image files are allowed")
     
-    # Удаляем старый аватар если есть
-    if current_user.avatar:
-        old_avatar_path = AVATAR_DIR / os.path.basename(current_user.avatar)
-        if old_avatar_path.exists():
-            old_avatar_path.unlink()
-    
-    # Генерируем уникальное имя файла
+    # Удаляем старый аватар (если он локальный)
+    if current_user.avatar and current_user.avatar.startswith("/media/"):
+        try:
+            # Превращаем URL /media/avatars/file.jpg обратно в путь /app/media/avatars/file.jpg
+            old_filename = os.path.basename(current_user.avatar)
+            old_file_path = AVATAR_DIR / old_filename
+            if old_file_path.exists():
+                old_file_path.unlink()
+        except Exception as e:
+            print(f"Error deleting old avatar: {e}")
+
     file_extension = os.path.splitext(file.filename)[1]
     unique_filename = f"{current_user.id}_{uuid.uuid4()}{file_extension}"
     file_path = AVATAR_DIR / unique_filename
     
-    # Сохраняем файл
     with open(file_path, "wb") as f:
         content = await file.read()
         f.write(content)
     
-    # Обновляем URL аватара в БД
-    avatar_url = f"/api/v1/files/avatars/{unique_filename}"
+    # ИЗМЕНЕНИЕ: URL для Nginx
+    avatar_url = f"/media/avatars/{unique_filename}"
+    
     current_user.avatar = avatar_url
     db.commit()
     db.refresh(current_user)
     
     return {"avatar_url": avatar_url}
 
-
-@router.get("/avatars/{filename}")
-async def get_avatar(filename: str):
-    """Получение файла аватара"""
-    from fastapi.responses import FileResponse
-    file_path = AVATAR_DIR / filename
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Avatar not found")
-    return FileResponse(file_path)
-
-
-@router.get("/attachments/{filename}")
-async def get_attachment(filename: str):
-    """Получение файла вложения"""
-    from fastapi.responses import FileResponse
-    file_path = ATTACHMENTS_DIR / filename
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(file_path)
+# Эндпоинты GET удалены, так как файлы теперь отдает Nginx
