@@ -75,15 +75,15 @@ jobs:
             SSL_DIR="$HOME/nginx_ssl"
             CONF_DIR="$HOME/nginx_conf"
             DATA_DIR="$HOME/app_data"
+            MEDIA_DIR="$HOME/app_media"  # <--- Папка для картинок
             
-            # Создаем папку для базы
-            mkdir -p "$DATA_DIR"
+            # Создаем все папки
+            mkdir -p "$DATA_DIR" "$MEDIA_DIR"
             
-            # !!! ВАЖНО: Даем права на запись всем !!!
-            # SQLite внутри докера может работать от другого юзера.
-            # 777 решает проблему "Permission denied" наверняка.
-            echo "$SUDO_PASS" | sudo -S chmod 777 "$DATA_DIR"
+            # ДАЕМ ПРАВА 777 (Чтобы и Бэк мог писать, и Nginx читать)
+            echo "$SUDO_PASS" | sudo -S chmod -R 777 "$DATA_DIR" "$MEDIA_DIR"
             
+            # Чистим конфиги, сертификаты обновляем
             echo "$SUDO_PASS" | sudo -S rm -rf "$SSL_DIR" "$CONF_DIR"
             mkdir -p "$SSL_DIR" "$CONF_DIR"
 
@@ -97,15 +97,16 @@ jobs:
             echo "--- 5. Starting App Containers ---"
             
             # BACKEND
-            # Исправление: Монтируем в /app/data
-            # URL sqlite:///data/db.sqlite3 (3 слеша) будет искать файл в папке ./data
-            # Так как WORKDIR обычно /app, он найдет его в /app/data
+            # Монтируем:
+            # Базу: $DATA_DIR -> /app/data
+            # Медиа: $MEDIA_DIR -> /app/media
             docker run -d --name ouroboros-back-container --network nginx_network \
               -e DATABASE_URL="${{ secrets.DATABASE_URL }}" \
               -e SECRET_KEY="${{ secrets.SECRET_KEY }}" \
               -e ALGORITHM=HS256 \
               -e ACCESS_TOKEN_EXPIRE_MINUTES=43200 \
               -v "$DATA_DIR":/app/data \
+              -v "$MEDIA_DIR":/app/media \
               --restart unless-stopped \
               "${{ secrets.DOCKER_IMAGE_BACK }}:latest" \
               uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --root-path /api
@@ -130,7 +131,7 @@ jobs:
                 access_log /var/log/nginx/access.log;
                 sendfile on;
                 keepalive_timeout 65;
-                client_max_body_size 20M;
+                client_max_body_size 20M; # Макс размер файла 20МБ
                 proxy_read_timeout 300s;
                 proxy_connect_timeout 75s;
 
@@ -148,6 +149,16 @@ jobs:
                     ssl_certificate_key /etc/nginx/ssl/certificate.key;
                     ssl_protocols TLSv1.2 TLSv1.3;
                     ssl_prefer_server_ciphers on;
+
+                    # --- РАЗДАЧА СТАТИКИ (МЕДИА) ---
+                    # Если запрос /media/avatars/1.jpg -> Nginx берет его из папки
+                    location /media/ {
+                        alias /var/www/media/;
+                        autoindex off;
+                        expires 30d; # Кэшируем картинки в браузере на месяц
+                        add_header Cache-Control "public, no-transform";
+                    }
+                    # -------------------------------
 
                     location /api/ {
                         proxy_pass http://ouroboros-back-container:8000/;
@@ -174,10 +185,12 @@ jobs:
             EOL
 
             echo "Starting Nginx..."
+            # Монтируем Медиа папку в Nginx по пути /var/www/media
             docker run -d --name nginx-proxy --network nginx_network \
               -p 80:80 -p 443:443 \
               -v "$CONF_DIR/nginx.conf":/etc/nginx/nginx.conf:ro \
               -v "$SSL_DIR":/etc/nginx/ssl:ro \
+              -v "$MEDIA_DIR":/var/www/media:ro \
               --restart unless-stopped \
               nginx:alpine
 
