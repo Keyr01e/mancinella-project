@@ -404,7 +404,25 @@ export default function App(){
     }
   }
 
-  function logout(){ localStorage.removeItem('token'); localStorage.removeItem('user_id'); setAuth(null); if(ws) ws.close(); setWs(null); }
+  function logout(){ 
+    // Leave voice channel before logging out
+    if (currentVoiceChannel) {
+      handleLeaveVoiceChannel();
+    }
+    // Close WebSocket connection
+    if (ws) {
+      try {
+        ws.closeConn && ws.closeConn();
+      } catch (e) {
+        console.warn('Error closing WebSocket:', e);
+      }
+      setWs(null);
+    }
+    // Clear auth data
+    localStorage.removeItem('token'); 
+    localStorage.removeItem('user_id'); 
+    setAuth(null);
+  }
 
   if(!auth || !auth.token || !auth.user_id) {
     return <Auth onAuth={(a)=>setAuth(a)} />
