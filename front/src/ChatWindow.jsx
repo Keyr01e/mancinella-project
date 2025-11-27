@@ -17,11 +17,42 @@ export default function ChatWindow({room,messages,onSend,onDeleteMessage,current
   const fileInputRef = useRef();
   const [text,setText]=useState('');
   const [attachedFiles, setAttachedFiles] = useState([]);
+  
+  // Проверяем, выбран ли канал
+  const isChannelSelected = room != null && room !== undefined && room !== '';
+  
+  // Функция для показа уведомления
+  const showChannelNotSelectedWarning = () => {
+    alert('Пожалуйста, выберите текстовый канал для отправки сообщений');
+  };
+  
+  // Обработчик отправки с проверкой
+  const handleSend = () => {
+    if (!isChannelSelected) {
+      showChannelNotSelectedWarning();
+      return;
+    }
+    if(text.trim()||attachedFiles.length>0){ 
+      onSend(text.trim(), attachedFiles); 
+      setText(''); 
+      setAttachedFiles([]);
+    }
+  };
+  
   useEffect(()=>{ if(sc.current) sc.current.scrollTop = sc.current.scrollHeight },[messages,room])
   return (
     <div className="chat">
       <div className="messages" ref={sc}>
-        {messages.filter(m=>String(m.chat_room_id)===String(room)).map(m=> {
+        {!isChannelSelected ? (
+          <div style={{display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#999', textAlign: 'center', padding: '20px'}}>
+            <div>
+              <div style={{fontSize: '24px', marginBottom: '10px'}}>💬</div>
+              <div style={{fontSize: '16px', fontWeight: '500'}}>Выберите текстовый канал</div>
+              <div style={{fontSize: '14px', marginTop: '5px'}}>Чтобы начать общение, выберите канал из списка слева</div>
+            </div>
+          </div>
+        ) : (
+          messages.filter(m=>String(m.chat_room_id)===String(room)).map(m=> {
           const avatarUrl = userAvatars?.[m.sender_id];
           const absoluteAvatarUrl = avatarUrl ? getAbsoluteUrl(avatarUrl) : null;
           return (
@@ -82,8 +113,9 @@ export default function ChatWindow({room,messages,onSend,onDeleteMessage,current
               )}
             </div>
           </div>
-        )})}
-        {messages.filter(m=>String(m.chat_room_id)===String(room)).length===0 && <div className="empty-note">No messages yet in this room.</div>}
+        )})
+        )}
+        {isChannelSelected && messages.filter(m=>String(m.chat_room_id)===String(room)).length===0 && <div className="empty-note">No messages yet in this room.</div>}
       </div>
       <div className="input" style={{flexDirection:'column',gap:8}}>
         {attachedFiles.length > 0 && (
@@ -108,31 +140,34 @@ export default function ChatWindow({room,messages,onSend,onDeleteMessage,current
               e.target.value = '';
             }}
           />
-          <button className="btn" onClick={()=>fileInputRef.current?.click()} title="Attach files">
+          <button 
+            className="btn" 
+            onClick={()=>fileInputRef.current?.click()} 
+            title="Attach files"
+            disabled={!isChannelSelected}
+            style={{opacity: isChannelSelected ? 1 : 0.5, cursor: isChannelSelected ? 'pointer' : 'not-allowed'}}
+          >
             📎
           </button>
           <input 
             value={text} 
             onChange={e=>setText(e.target.value)} 
-            placeholder={'Message #' + room} 
+            placeholder={isChannelSelected ? 'Message #' + room : 'Выберите канал для отправки сообщений'} 
             onKeyDown={e=>{ 
               if(e.key==='Enter'&&(text.trim()||attachedFiles.length>0)){ 
-                onSend(text.trim(), attachedFiles); 
-                setText(''); 
-                setAttachedFiles([]);
-              } 
+                handleSend(); 
+              } else if(e.key==='Enter' && !isChannelSelected) {
+                showChannelNotSelectedWarning();
+              }
             }} 
-            style={{flex:1}}
+            disabled={!isChannelSelected}
+            style={{flex:1, opacity: isChannelSelected ? 1 : 0.5, cursor: isChannelSelected ? 'text' : 'not-allowed'}}
           />
           <button 
             className="btn primary" 
-            onClick={()=>{ 
-              if(text.trim()||attachedFiles.length>0){ 
-                onSend(text.trim(), attachedFiles); 
-                setText(''); 
-                setAttachedFiles([]);
-              } 
-            }}
+            onClick={handleSend}
+            disabled={!isChannelSelected || (!text.trim() && attachedFiles.length === 0)}
+            style={{opacity: (isChannelSelected && (text.trim() || attachedFiles.length > 0)) ? 1 : 0.5, cursor: (isChannelSelected && (text.trim() || attachedFiles.length > 0)) ? 'pointer' : 'not-allowed'}}
           >
             Send
           </button>
