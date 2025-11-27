@@ -1,7 +1,7 @@
 import React, {useEffect, useState, useRef} from 'react'
 import Sidebar from './Sidebar'
 import ChatWindow from './ChatWindow'
-import VoicePanel from './VoicePanel'
+import VoicePanel, { playMessageTone } from './VoicePanel'
 import VoiceChannels from './VoiceChannels'
 import Auth from './Auth'
 import { createWS } from './ws'
@@ -187,6 +187,11 @@ export default function App(){
         loadUserAvatar(msg.sender_id);
       }
       
+      // Воспроизводим звуковой сигнал для сообщений от других пользователей
+      if(msg.sender_id && String(msg.sender_id) !== String(auth?.user_id)) {
+        playMessageTone();
+      }
+      
       setMessages(m=>[...m,{ 
         id: msg.id||Date.now(), 
         sender_id: msg.sender_id,
@@ -207,6 +212,11 @@ export default function App(){
       // Загружаем аватар отправителя, если его еще нет
       if(data.sender_id && !userAvatars[data.sender_id]) {
         loadUserAvatar(data.sender_id);
+      }
+      
+      // Воспроизводим звуковой сигнал для сообщений от других пользователей
+      if(data.sender_id && String(data.sender_id) !== String(auth?.user_id)) {
+        playMessageTone();
       }
       
       setMessages(m=>[...m,{ 

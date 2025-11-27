@@ -100,6 +100,23 @@ function playUnmuteTone(){
   }catch(e){ console.warn('playUnmuteTone failed', e) }
 }
 
+function playMessageTone(){
+  try{
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 800;
+    gain.gain.value = 0.1;
+    osc.start();
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+    osc.stop(ctx.currentTime + 0.2);
+  }catch(e){ console.warn('playMessageTone failed', e) }
+}
+
+export { playMessageTone };
+
 export default function VoicePanel({ws, auth, onRemoteStream, activeRoom, onRtcReady, onLeave}){
   // All hooks must be called before any early returns
   const [rtc, setRtc] = useState(null)
