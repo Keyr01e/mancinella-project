@@ -36,7 +36,7 @@ export default function ChatWindow({room,messages,onSend,onDeleteMessage,current
             <div className="body">
               <div className="meta">
                 <strong>{m.sender_name||m.author||('User '+(m.sender_id||''))}</strong> • <span className="small">{typeof m.time === 'string' ? m.time : (m.timestamp ? new Date(m.timestamp).toLocaleTimeString().slice(0,5) : '')}</span>
-                {m.sender_id === currentUserId && onDeleteMessage && (
+                {String(m.sender_id) === String(currentUserId) && onDeleteMessage && (
                   <button 
                     onClick={()=>onDeleteMessage(m.id)} 
                     style={{marginLeft:8,background:'none',border:'none',color:'#ed4245',cursor:'pointer',fontSize:12,padding:0}}

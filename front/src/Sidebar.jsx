@@ -12,7 +12,7 @@ export default function Sidebar({rooms,active,onSelect,onAdd,onDelete,currentUse
               </div>
               <div style={{flex:1}}>{r.name}</div>
             </div>
-            {r.creator_id === currentUserId && onDelete && (
+            {String(r.creator_id) === String(currentUserId) && onDelete && (
               <button 
                 onClick={(e)=>{e.stopPropagation(); onDelete(r.id)}} 
                 style={{background:'none',border:'none',color:'#ed4245',cursor:'pointer',fontSize:14,padding:'4px 8px'}}
